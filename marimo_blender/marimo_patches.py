@@ -45,18 +45,32 @@ def _register_main_thread_executor() -> None:
     thread (via main_thread.run_on_main). Marimo composes this on top of the
     DefaultExecutor: our `execute_cell` calls `self.base.execute_cell` under a
     main-thread bridge. This makes bpy reads + writes from cells safe.
+
+    Marimo's runtime context lives in a threading.local; we snapshot it on
+    the kernel thread and install it on the main thread for the duration of
+    the cell so UI element registration, reactive wiring, etc. work.
     """
     import asyncio
 
+    from marimo._runtime.context.types import _THREAD_LOCAL_CONTEXT
     from marimo._runtime.executor import _EXECUTOR_REGISTRY, Executor
 
     from . import main_thread
 
+    def _run_with_ctx(ctx, fn, *args, **kwargs):
+        prev = getattr(_THREAD_LOCAL_CONTEXT, "runtime_context", None)
+        _THREAD_LOCAL_CONTEXT.runtime_context = ctx
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _THREAD_LOCAL_CONTEXT.runtime_context = prev
+
     class MainThreadExecutor(Executor):
         def execute_cell(self, cell, glbls, graph):
             assert self.base is not None
+            ctx = getattr(_THREAD_LOCAL_CONTEXT, "runtime_context", None)
             return main_thread.run_on_main(
-                self.base.execute_cell, cell, glbls, graph
+                _run_with_ctx, ctx, self.base.execute_cell, cell, glbls, graph
             )
 
         async def execute_cell_async(self, cell, glbls, graph):
@@ -65,10 +79,13 @@ def _register_main_thread_executor() -> None:
             # here; we synchronously exec on the main thread via the sync path
             # so bpy operations are safe. Offload the blocking wait to a thread
             # pool so the kernel's asyncio loop stays responsive.
+            ctx = getattr(_THREAD_LOCAL_CONTEXT, "runtime_context", None)
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
                 None,
                 main_thread.run_on_main,
+                _run_with_ctx,
+                ctx,
                 self.base.execute_cell,
                 cell,
                 glbls,
