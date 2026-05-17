@@ -1,5 +1,7 @@
 # marimo-blender
 
+
+
 A Blender add-on that runs a [marimo](https://marimo.io) reactive notebook server inside Blender, so cells can `import bpy` and drive the running scene live.
 
 ## Quick start
