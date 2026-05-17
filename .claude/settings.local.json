@@ -1,6 +1,15 @@
 {
   "permissions": {
-    "defaultMode": "bypassPermissions"
-  },
-  "skipDangerousModePermissionPrompt": true
+    "allow": [
+      "Bash(unlink \"/Users/jan-hendrik/Library/Application Support/Blender/5.1/extensions/.local/lib/python3.13/site-packages/marimo\")",
+      "Read(//Users/jan-hendrik/Library/Application Support/Blender/5.1/extensions/.local/lib/python3.13/site-packages/**)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} in %{time_total}s\\\\n\" --max-time 3 http://localhost:2718/)",
+      "Bash(lsof -nP -iTCP:2718 -sTCP:LISTEN)",
+      "Bash(/Applications/Blender.app/Contents/Resources/5.1/python/bin/python3.13 -c ' *)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(curl -sSL -H \"User-Agent: marimo-blender-check\" https://api.github.com/repos/kolibril13/marimo-blender/releases/latest)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('tag:', d.get\\('tag_name'\\)\\); print\\('assets:'\\); [print\\(f'  {a[\\\\\"name\\\\\"]:60}  {a[\\\\\"size\\\\\"]} bytes'\\) for a in d.get\\('assets', []\\)]; print\\('message:', d.get\\('message',''\\)\\) if 'message' in d else None\")",
+      "Bash(curl -sSL -H \"User-Agent: check\" https://raw.githubusercontent.com/kolibril13/marimo-blender/v0.3.3/marimo_blender/blender_manifest.toml)"
+    ]
+  }
 }
