@@ -255,11 +255,17 @@ class Server(Executor):
         thread.start()
 
     def start(self, port, filename, line_callback=None, finally_callback=None):
+        # Apply marimo patches + register the main-thread pump on Blender's
+        # main thread BEFORE we spawn the server thread, so the executor is
+        # registered before any session/kernel construction, and so the
+        # bpy.app.timers.register call (which requires the main thread)
+        # happens here.
+        from . import main_thread, marimo_patches
+        marimo_patches.apply()
+        main_thread.ensure_registered()
 
         def server_thread_function(port: int, filename: str):
             import signal
-            from . import marimo_patches
-            marimo_patches.apply()
             from marimo._server.start import start
             from marimo._utils.net import find_free_port
             from marimo._session.model import SessionMode
@@ -308,7 +314,7 @@ class Server(Executor):
                 loop_patches.append((loop_cls, orig_add, orig_remove))
 
             try:
-                self._port = find_free_port(port)
+                self._port = find_free_port(port, addr="127.0.0.1")
                 workspace = infer_workspace(filename) if filename else EmptyWorkspace()
                 start(
                     workspace=workspace,

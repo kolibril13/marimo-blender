@@ -35,8 +35,49 @@ def apply() -> None:
     _patch_runtime_subprocess_calls()
     _patch_runtime_stream_classes()
     _patch_kernel_manager()
+    _register_main_thread_executor()
 
     _PATCHED = True
+
+
+def _register_main_thread_executor() -> None:
+    """Register a cell executor that runs each cell's body on Blender's main
+    thread (via main_thread.run_on_main). Marimo composes this on top of the
+    DefaultExecutor: our `execute_cell` calls `self.base.execute_cell` under a
+    main-thread bridge. This makes bpy reads + writes from cells safe.
+    """
+    import asyncio
+
+    from marimo._runtime.executor import _EXECUTOR_REGISTRY, Executor
+
+    from . import main_thread
+
+    class MainThreadExecutor(Executor):
+        def execute_cell(self, cell, glbls, graph):
+            assert self.base is not None
+            return main_thread.run_on_main(
+                self.base.execute_cell, cell, glbls, graph
+            )
+
+        async def execute_cell_async(self, cell, glbls, graph):
+            assert self.base is not None
+            # Cells with top-level `await` aren't supported on the main thread
+            # here; we synchronously exec on the main thread via the sync path
+            # so bpy operations are safe. Offload the blocking wait to a thread
+            # pool so the kernel's asyncio loop stays responsive.
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                None,
+                main_thread.run_on_main,
+                self.base.execute_cell,
+                cell,
+                glbls,
+                graph,
+            )
+
+    _EXECUTOR_REGISTRY.register(
+        "marimo-blender-main-thread", MainThreadExecutor
+    )
 
 
 def _patch_os_setsid() -> None:
