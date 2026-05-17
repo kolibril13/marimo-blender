@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unlink \"/Users/jan-hendrik/Library/Application Support/Blender/5.1/extensions/.local/lib/python3.13/site-packages/marimo\")",
+      "Read(//Users/jan-hendrik/Library/Application Support/Blender/5.1/extensions/.local/lib/python3.13/site-packages/**)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} in %{time_total}s\\\\n\" --max-time 3 http://localhost:2718/)",
+      "Bash(lsof -nP -iTCP:2718 -sTCP:LISTEN)",
+      "Bash(/Applications/Blender.app/Contents/Resources/5.1/python/bin/python3.13 -c ' *)"
+    ]
+  }
+}

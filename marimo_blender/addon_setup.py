@@ -173,8 +173,18 @@ class Installer(Executor):
         site_packages_path = next((p for p in sys.path if p.endswith('site-packages')), None)
         target_option = ['--target', site_packages_path] if site_packages_path else []
 
+        def cleanup_legacy_marimo_symlink():
+            if not site_packages_path:
+                return
+            marimo_path = os.path.join(site_packages_path, 'marimo')
+            if os.path.islink(marimo_path) or (os.path.exists(marimo_path) and not os.path.isdir(marimo_path)):
+                os.unlink(marimo_path)
+                print(f'Removed legacy marimo symlink: {marimo_path}')
+
         def mark_installed():
             self.installed = True
+
+        cleanup_legacy_marimo_symlink()
 
         self.exec_command(
             sys.executable, '-m', 'ensurepip',
@@ -247,20 +257,82 @@ class Server(Executor):
     def start(self, port, filename, line_callback=None, finally_callback=None):
 
         def server_thread_function(port: int, filename: str):
+            import signal
+            from . import marimo_patches
+            marimo_patches.apply()
             from marimo._server.start import start
-            from marimo._server.utils import find_free_port
-            self._port = find_free_port(port)
-            start(
-                development_mode=True,
-                quiet=False,
-                host="",
-                port=self._port,
-                headless=False,
-                filename=filename or None,
-                mode='edit',
-                include_code=True,
-                watch=False,
-            )
+            from marimo._utils.net import find_free_port
+            from marimo._session.model import SessionMode
+            from marimo._server.tokens import AuthToken
+            from marimo._server.workspace import EmptyWorkspace, infer_workspace
+            from marimo._cli.parse_args import parse_args
+
+            # marimo + uvicorn install signal handlers (signal.signal and
+            # loop.add_signal_handler). Both only work on the main thread, but
+            # we run in a daemon thread inside Blender. Swallow the errors so
+            # the server can finish starting.
+            original_signal = signal.signal
+
+            def patched_signal(signum, handler):
+                try:
+                    return original_signal(signum, handler)
+                except ValueError:
+                    return None
+
+            signal.signal = patched_signal
+
+            loop_patches = []
+            try:
+                from asyncio import unix_events
+            except ImportError:
+                unix_events = None
+            if unix_events is not None:
+                loop_cls = unix_events._UnixSelectorEventLoop
+                orig_add = loop_cls.add_signal_handler
+                orig_remove = loop_cls.remove_signal_handler
+
+                def safe_add(self, sig, callback, *args):
+                    try:
+                        return orig_add(self, sig, callback, *args)
+                    except (ValueError, RuntimeError):
+                        return None
+
+                def safe_remove(self, sig):
+                    try:
+                        return orig_remove(self, sig)
+                    except (ValueError, RuntimeError):
+                        return False
+
+                loop_cls.add_signal_handler = safe_add
+                loop_cls.remove_signal_handler = safe_remove
+                loop_patches.append((loop_cls, orig_add, orig_remove))
+
+            try:
+                self._port = find_free_port(port)
+                workspace = infer_workspace(filename) if filename else EmptyWorkspace()
+                start(
+                    workspace=workspace,
+                    mode=SessionMode.EDIT,
+                    development_mode=True,
+                    quiet=False,
+                    include_code=True,
+                    ttl_seconds=None,
+                    headless=False,
+                    port=self._port,
+                    host="127.0.0.1",
+                    proxy=None,
+                    watch=False,
+                    cli_args=parse_args(()),
+                    argv=[],
+                    auth_token=AuthToken(""),
+                    redirect_console_to_browser=False,
+                    skew_protection=False,
+                )
+            finally:
+                signal.signal = original_signal
+                for loop_cls, orig_add, orig_remove in loop_patches:
+                    loop_cls.add_signal_handler = orig_add
+                    loop_cls.remove_signal_handler = orig_remove
         self.exec_function(server_thread_function, port, filename, line_callback=line_callback, finally_callback=finally_callback)
 
     def stop(self):
