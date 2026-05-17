@@ -235,6 +235,12 @@ class Server(Executor):
                 loop_patches.append((loop_cls, orig_add, orig_remove))
 
             try:
+                # Blender's cwd is often `/` (or the app bundle) when launched
+                # from the Dock, which marimo can't write to. Default new
+                # notebooks to the user's home dir.
+                if not filename:
+                    os.chdir(os.path.expanduser("~"))
+
                 self._port = find_free_port(port, addr="127.0.0.1")
                 workspace = infer_workspace(filename) if filename else EmptyWorkspace()
                 start(
