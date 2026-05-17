@@ -1,4 +1,3 @@
-import os
 import bpy
 
 from . import addon_setup
@@ -108,23 +107,18 @@ class StartMarimoServer(bpy.types.Operator):
 
     def execute(self, context):
         if not addon_setup.server.is_running:
-            from .addon_utils import show_message_box
-            show_message_box("Marimo Server is starting ...", "Marimo Server", "INFO")
             _LINES.clear()
             region = context.region
-            prefs = bpy.context.preferences.addons[__package__].preferences
-            port, filename = prefs.port, prefs.filename
-            if filename and os.path.dirname(filename) == os.getcwd():
-                filename = os.path.basename(filename)
+            prefs = context.preferences.addons[__package__].preferences
             addon_setup.server.start(
-                port,
-                filename,
+                prefs.port,
+                prefs.filename,
                 line_callback=lambda line: _lines_append(line) or region.tag_redraw(),
-                finally_callback=lambda e: region.tag_redraw()
+                finally_callback=lambda e: region.tag_redraw(),
             )
         else:
             import webbrowser
-            webbrowser.open(f"http://localhost:{addon_setup.server.port}")
+            webbrowser.open(f"http://127.0.0.1:{addon_setup.server.port}")
         return {'FINISHED'}
 
 
@@ -148,6 +142,7 @@ def draw_preferences(layout: bpy.types.UILayout, prefs: "MarimoAddonPreferences"
     all_installed = all(modules.values())
 
     # ── Launch ─────────────────────────────────────────────────
+    is_running = addon_setup.server.is_running
     launch_header, launch_body = layout.panel("marimo_launch", default_closed=False)
     launch_header.label(text="Launch", icon='PLAY')
     if launch_body is not None:
@@ -156,13 +151,22 @@ def draw_preferences(layout: bpy.types.UILayout, prefs: "MarimoAddonPreferences"
         split.prop(prefs, 'port')
         split.prop(prefs, 'filename', text="", icon='FILE_SCRIPT')
 
-        big = launch_body.row()
-        big.scale_y = 1.4
-        big.enabled = all_installed
-        big.operator(StartMarimoServer.bl_idname, icon='URL', text="Start Notebook Server")
-
-        if not all_installed:
-            launch_body.label(text="Install dependencies first ↓", icon='INFO')
+        if is_running:
+            launch_body.label(
+                text=f"Server running on http://127.0.0.1:{addon_setup.server.port}",
+                icon='RADIOBUT_ON',
+            )
+            actions = launch_body.row(align=True)
+            actions.scale_y = 1.4
+            actions.operator(StartMarimoServer.bl_idname, icon='URL', text="Open in Browser")
+            actions.operator(StopMarimoServer.bl_idname, icon='X', text="Stop")
+        else:
+            big = launch_body.row()
+            big.scale_y = 1.4
+            big.enabled = all_installed
+            big.operator(StartMarimoServer.bl_idname, icon='URL', text="Start Notebook Server")
+            if not all_installed:
+                launch_body.label(text="Install dependencies first ↓", icon='INFO')
 
     # ── Dependencies ───────────────────────────────────────────
     deps_header, deps_body = layout.panel("marimo_dependencies", default_closed=all_installed)

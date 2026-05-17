@@ -22,6 +22,7 @@ import threading
 from typing import Any
 
 _PATCHED = False
+_RUNNING_UVICORN_SERVER: Any = None
 
 
 def apply() -> None:
@@ -35,9 +36,36 @@ def apply() -> None:
     _patch_runtime_subprocess_calls()
     _patch_runtime_stream_classes()
     _patch_kernel_manager()
+    _capture_uvicorn_server()
     _register_main_thread_executor()
 
     _PATCHED = True
+
+
+def get_running_uvicorn_server() -> Any:
+    """Return the most recently constructed uvicorn.Server instance, or None.
+
+    Used by addon_setup.Server.stop() to set should_exit on the live server
+    so the uvicorn run loop drains and the background thread exits.
+    """
+    return _RUNNING_UVICORN_SERVER
+
+
+def _capture_uvicorn_server() -> None:
+    """Wrap uvicorn.Server.__init__ so every construction stashes the
+    instance in a module-level slot. Marimo creates its server inside
+    `_server.start.start()`, beyond reach of our normal API surface.
+    """
+    import uvicorn
+
+    original_init = uvicorn.Server.__init__
+
+    def wrapped_init(self, *args, **kwargs):
+        global _RUNNING_UVICORN_SERVER
+        original_init(self, *args, **kwargs)
+        _RUNNING_UVICORN_SERVER = self
+
+    uvicorn.Server.__init__ = wrapped_init
 
 
 def _register_main_thread_executor() -> None:

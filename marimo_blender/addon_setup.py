@@ -1,13 +1,11 @@
-import contextlib
-import io
 import logging
+import os
 import pkgutil
 import subprocess
-import os
 import sys
 import threading
 import traceback
-from typing import Iterable, Callable, Any
+from typing import Any, Callable
 
 
 def _invoke_callback(callback=None, *args):
@@ -20,31 +18,21 @@ def _invoke_callback(callback=None, *args):
 
 
 class Executor:
+    """Run a function or a subprocess in a daemon thread, with line-by-line
+    stdout callback and a finally callback."""
+
     def __init__(self):
         self._is_running = False
         self._return_value = None
         self._exception = None
-        self._process = None
+        self._process: subprocess.Popen | None = None
         self._exit_code = -1
         self._command_line = ''
 
     def exec_function(self, function, *args, line_callback=None, finally_callback=None):
-        class OutBuffer(io.StringIO):
-            def write(self, text: str) -> int:
-                _invoke_callback(line_callback, text)
-                return super().write(text)
-
-            def writelines(self, lines: Iterable[str]) -> None:
-                lines_buffer = list(l for l in lines)
-                for line in lines_buffer:
-                    _invoke_callback(line_callback, line)
-                return super().writelines(lines_buffer)
-
         def _run_background():
-            buffer = OutBuffer()
             try:
-                with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
-                    self._return_value = function(*args)
+                self._return_value = function(*args)
             except Exception as exception:
                 self._exception = exception
                 self.write_exception(exception, line_callback=line_callback)
@@ -56,8 +44,7 @@ class Executor:
         self._return_value = None
         self._exception = None
 
-        thread = threading.Thread(target=_run_background)
-        thread.daemon = True
+        thread = threading.Thread(target=_run_background, daemon=True)
         thread.start()
 
     @staticmethod
@@ -77,9 +64,10 @@ class Executor:
 
         def _enqueue_output():
             encoding = sys.getdefaultencoding()
+            assert self._process is not None
             input_text_io = self._process.stdout
+            assert input_text_io is not None
 
-            buffer: bytearray
             while self._process.poll() is None:
                 for buffer in iter(input_text_io.readline, b''):
                     text = buffer.decode(encoding).rstrip()
@@ -104,7 +92,7 @@ class Executor:
         return self._exception
 
     @property
-    def command_line(self) -> int:
+    def command_line(self) -> str:
         return self._command_line
 
     @property
@@ -113,69 +101,34 @@ class Executor:
 
 
 class Installer(Executor):
+    # marimo declares its full transitive dep set in its own Requires-Dist, so
+    # we let pip resolve those for us. `black` is an optional extra that
+    # marimo uses for cell formatting if present.
     dependencies = [
-        # For maintainable cli
-        "click>=8.0,<9",
-        # For python 3.8 compatibility
-        # "importlib_resources>=5.10.2; python_version < \"3.9\"",
-        # code completion
-        "jedi>=0.18.0",
-        # compile markdown to html
-        "markdown>=3.4,<4",
-        # add features to markdown
-        "pymdown-extensions>=9.0,<11",
-        # syntax highlighting of code in markdown
-        "pygments>=2.13,<3",
-        # for reading, writing configs
-        "tomlkit>= 0.12.0",
-        # web server
-        # - 0.22.0 introduced timeout-graceful-shutdown, which we use
-        "uvicorn >= 0.22.0",
-        # web framework
-        # - 0.26.1 introduced lifespans, which we use
-        # - starlette 0.36.0 introduced a bug
-        "starlette>=0.26.1,!=0.36.0",
-        # websockets for use with starlette
-        "websockets >= 10.0.0,<13.0.0",
-        # python <=3.10 compatibility
-        # "typing_extensions>=4.4.0; python_version < \"3.10\"",
-        # for rst parsing
-        "docutils>=0.17.0",
-        # for cell formatting; if user version is not compatible, no-op
-        # so no lower bound needed
-        "black",
         "marimo",
+        "black",
     ]
-
-    if sys.version_info < (3, 9):
-        dependencies.append("importlib_resources>=5.10.2")
-
-    if sys.version_info < (3, 10):
-        dependencies.append("typing_extensions>=4.4.0")
 
     def get_required_modules(self) -> dict[str, bool]:
         modules = {d.split(">=")[0].strip(): False for d in self.dependencies}
         for m in pkgutil.iter_modules():
             if m.name in modules:
                 modules[m.name] = True
-            elif m.name == "pymdownx":
-                modules["pymdown-extensions"] = True
         return modules
 
     def install_python_modules(self, line_callback=None, finally_callback=None):
-
         site_packages_path = next((p for p in sys.path if p.endswith('site-packages')), None)
         target_option = ['--target', site_packages_path] if site_packages_path else []
 
-        def cleanup_legacy_marimo_symlink():
-            if not site_packages_path:
-                return
+        # Migration path: users coming from the old vendored-marimo addon
+        # have a symlink at site-packages/marimo pointing into the addon dir.
+        # pip --target then trips over `shutil.move` on a symlink. Clear it
+        # before installing.
+        if site_packages_path:
             marimo_path = os.path.join(site_packages_path, 'marimo')
             if os.path.islink(marimo_path) or (os.path.exists(marimo_path) and not os.path.isdir(marimo_path)):
                 os.unlink(marimo_path)
                 print(f'Removed legacy marimo symlink: {marimo_path}')
-
-        cleanup_legacy_marimo_symlink()
 
         self.exec_command(
             sys.executable, '-m', 'ensurepip',
@@ -221,33 +174,13 @@ class Installer(Executor):
 class Server(Executor):
     def __init__(self):
         super().__init__()
-        self._port = None
-
-    def exec_function(self, function, *args, line_callback=None, finally_callback=None):
-        def _run_background():
-            try:
-                self._return_value = function(*args)
-            except Exception as exception:
-                self._exception = exception
-                self.write_exception(exception, line_callback=line_callback)
-            finally:
-                self._is_running = False
-                _invoke_callback(finally_callback, self)
-
-        self._is_running = True
-        self._return_value = None
-        self._exception = None
-
-        thread = threading.Thread(target=_run_background)
-        thread.daemon = True
-        thread.start()
+        self._port: int | None = None
 
     def start(self, port, filename, line_callback=None, finally_callback=None):
         # Apply marimo patches + register the main-thread pump on Blender's
-        # main thread BEFORE we spawn the server thread, so the executor is
-        # registered before any session/kernel construction, and so the
-        # bpy.app.timers.register call (which requires the main thread)
-        # happens here.
+        # main thread BEFORE we spawn the server thread. The executor must be
+        # registered before any session/kernel construction, and
+        # bpy.app.timers.register requires the main thread.
         from . import main_thread, marimo_patches
         marimo_patches.apply()
         main_thread.ensure_registered()
@@ -327,13 +260,22 @@ class Server(Executor):
                 for loop_cls, orig_add, orig_remove in loop_patches:
                     loop_cls.add_signal_handler = orig_add
                     loop_cls.remove_signal_handler = orig_remove
+                self._port = None
         self.exec_function(server_thread_function, port, filename, line_callback=line_callback, finally_callback=finally_callback)
 
     def stop(self):
-        raise NotImplementedError()
+        """Signal the running uvicorn server to shut down. The server thread
+        exits once uvicorn drains its connections, flipping `is_running` to
+        False. The kernel threads are daemons and die with the process; we
+        don't try to force-stop them here.
+        """
+        from . import marimo_patches
+        uv_server = marimo_patches.get_running_uvicorn_server()
+        if uv_server is not None:
+            uv_server.should_exit = True
 
     @property
-    def port(self):
+    def port(self) -> int | None:
         return self._port
 
 
