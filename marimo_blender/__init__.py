@@ -20,7 +20,8 @@ from .preferences import (
     UninstallPythonModules,
     ListPythonModules,
     StartMarimoServer,
-    StopMarimoServer
+    StopMarimoServer,
+    draw_preferences,
 )
 
 
@@ -35,11 +36,8 @@ class MARIMO_PT_main_panel(bpy.types.Panel):
     bl_category = 'Marimo'
 
     def draw(self, context):
-        layout = self.layout
-        pref = context.preferences.addons[__package__].preferences
-        # layout.prop(pref, "server_port")
-        layout.prop(pref, "filename", text="File Path")
-        layout.operator(StartMarimoServer.bl_idname, icon='URL', text="Start Notebook Server")
+        prefs = context.preferences.addons[__package__].preferences
+        draw_preferences(self.layout, prefs)
 
 
 classes = (

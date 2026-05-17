@@ -171,31 +171,10 @@ class Installer(Executor):
     def install_python_modules(self, line_callback=None, finally_callback=None):
 
         site_packages_path = next((p for p in sys.path if p.endswith('site-packages')), None)
-
-        def is_junction(path: str) -> bool:
-            try:
-                return bool(os.readlink(path))
-            except OSError:
-                return False
-
-        def replace_marimo_module():
-            addon_path_marimo = os.path.join(os.path.dirname(__file__), 'marimo')
-            site_package_marimo = os.path.join(site_packages_path, 'marimo')
-            if os.path.exists(site_package_marimo):
-                if is_junction(site_package_marimo) or os.path.islink(site_package_marimo):
-                    os.unlink(site_package_marimo)
-                elif os.path.isdir(site_package_marimo):
-                    import shutil
-                    shutil.rmtree(site_package_marimo)
-            if sys.platform == 'win32':
-                import _winapi
-                _winapi.CreateJunction(addon_path_marimo, site_package_marimo)
-            else:
-                os.symlink(addon_path_marimo, site_package_marimo)
-            print(f'Create symlink: {site_package_marimo} -> {addon_path_marimo}')
-            self.installed = True
-
         target_option = ['--target', site_packages_path] if site_packages_path else []
+
+        def mark_installed():
+            self.installed = True
 
         self.exec_command(
             sys.executable, '-m', 'ensurepip',
@@ -207,10 +186,10 @@ class Installer(Executor):
                 '--no-input',
                 '--exists-action', 'i',
                 '--upgrade',
-                *[name for name, installed in self.get_required_modules().items() if not installed and name != 'marimo'],
+                *[name for name, installed in self.get_required_modules().items() if not installed],
                 line_callback=line_callback,
                 finally_callback=lambda e: e.exec_function(
-                    replace_marimo_module, line_callback=line_callback, finally_callback=finally_callback
+                    mark_installed, line_callback=line_callback, finally_callback=finally_callback
                 )
             )
         )
@@ -229,7 +208,7 @@ class Installer(Executor):
         self.exec_command(
             sys.executable, '-m', 'pip', 'uninstall',
             '--yes',
-            *[name for name, installed in self.get_required_modules().items() if installed and name != 'marimo'],
+            *[name for name, installed in self.get_required_modules().items() if installed],
             line_callback=line_callback, finally_callback=finally_callback
         )
         self.installed = False

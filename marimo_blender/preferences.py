@@ -143,6 +143,57 @@ class StopMarimoServer(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def draw_preferences(layout: bpy.types.UILayout, prefs: "MarimoAddonPreferences"):
+    row = layout.row(align=True)
+    split = row.split(factor=0.33)
+    split.prop(prefs, 'port')
+    split.prop(prefs, 'filename', text="", icon='FILE_SCRIPT')
+
+    row = layout.row()
+    row.operator(StartMarimoServer.bl_idname, icon='URL')
+    row.operator(InstallPythonModules.bl_idname, icon="PREFERENCES")
+
+    row = layout.row()
+    row.label(text="Required Python Modules:")
+
+    row = layout.row(align=True)
+    flow = row.grid_flow(align=True)
+
+    for name, is_installed in addon_setup.installer.get_required_modules().items():
+        flow.row().label(text=name, icon='CHECKMARK' if is_installed else 'REC' if name == 'fake-bpy-module' else 'ERROR')
+
+    row = layout.row()
+    row.operator(UninstallPythonModules.bl_idname)
+    row.operator(ListPythonModules.bl_idname)
+
+    row = layout.row()
+    flow = row.grid_flow(align=True)
+    row = flow.row(align=True)
+    row.operator(InstallPythonModule.bl_idname, icon='PLUS', text='pip install').module_name = prefs.module_name
+    row = flow.row(align=True)
+    row.prop(prefs, 'module_name', text='')
+
+    col = layout.column(align=False)
+    row = col.row(align=True)
+    row.prop(
+        prefs, 'show_logs',
+        icon='TRIA_DOWN' if prefs.show_logs else 'TRIA_RIGHT',
+        icon_only=True,
+        emboss=False,
+    )
+    row.label(text='Logs')
+    exit_code = addon_setup.installer.exit_code
+    if addon_setup.installer.is_running:
+        row.label(text="Processing ...", icon='SORTTIME')
+    elif exit_code >= 0:
+        row.label(text=f"Done with code: {exit_code}", icon='CHECKMARK' if exit_code == 0 else 'ERROR')
+
+    if prefs.show_logs:
+        box = col.box().column(align=True)
+        for line in _LINES:
+            box.label(text=line)
+
+
 class MarimoAddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __package__
 
@@ -155,54 +206,4 @@ class MarimoAddonPreferences(bpy.types.AddonPreferences):
     module_name: bpy.props.StringProperty(name="Module Name", default="")
 
     def draw(self, context: bpy.types.Context):
-        layout = self.layout
-
-        row = layout.row(align=True)
-        split = row.split(factor=0.33)
-        split.prop(self, 'port')
-        split.prop(self, 'filename', text="", icon='FILE_SCRIPT')
-
-        row = layout.row()
-        row.operator(StartMarimoServer.bl_idname, icon='URL')
-        row.operator(InstallPythonModules.bl_idname, icon="PREFERENCES")
-        # row.operator(StopMarimoServer.bl_idname, icon='X')
-
-        row = layout.row()
-        row.label(text="Required Python Modules:")
-
-        row = layout.row(align=True)
-        flow = row.grid_flow(align=True)
-
-        for name, is_installed in addon_setup.installer.get_required_modules().items():
-            flow.row().label(text=name, icon='CHECKMARK' if is_installed else 'REC' if name == 'fake-bpy-module' else 'ERROR')
-
-        row = layout.row()
-        row.operator(UninstallPythonModules.bl_idname)
-        row.operator(ListPythonModules.bl_idname)
-
-        row = layout.row()
-        flow = row.grid_flow(align=True)
-        row = flow.row(align=True)
-        row.operator(InstallPythonModule.bl_idname, icon='PLUS', text='pip install').module_name = self.module_name
-        row = flow.row(align=True)
-        row.prop(self, 'module_name', text='')
-
-        col = layout.column(align=False)
-        row = col.row(align=True)
-        row.prop(
-            self, 'show_logs',
-            icon='TRIA_DOWN' if self.show_logs else 'TRIA_RIGHT',
-            icon_only=True,
-            emboss=False,
-        )
-        row.label(text='Logs')
-        exit_code = addon_setup.installer.exit_code
-        if addon_setup.installer.is_running:
-            row.label(text="Processing ...", icon='SORTTIME')
-        elif exit_code >= 0:
-            row.label(text=f"Done with code: {exit_code}", icon='CHECKMARK' if exit_code == 0 else 'ERROR')
-
-        if self.show_logs:
-            box = col.box().column(align=True)
-            for line in _LINES:
-                box.label(text=line)
+        self.layout.label(text="Settings available in 3D View > Sidebar (N) > Marimo", icon='INFO')
