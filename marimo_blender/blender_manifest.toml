@@ -4,9 +4,9 @@ schema_version = "1.0.0"
 # Change the values according to your extension
 id = "marimo_blender"
 version = "0.3.0"
-name = "Blender Notebook"
+name = "Marimo"
 tagline = "Reactive notebook for Python integrated in blender"
-maintainer = "Dale Chan <imare32@outlook.com>"
+maintainer = "Dale Chan <imare32@outlook.com>, Jan-Hendrik Müller"
 # Supported types: "add-on", "theme"
 type = "add-on"
 
