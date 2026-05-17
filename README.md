@@ -1,4 +1,4 @@
-# marimo-blender
+# marimo-blender hendrik
 
 [Marimo](https://github.com/marimo-team/marimo) is a reactive notebook for Python, and this repository integrates it as an addon into Blender.
 
