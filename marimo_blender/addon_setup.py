@@ -144,7 +144,6 @@ class Installer(Executor):
         # for cell formatting; if user version is not compatible, no-op
         # so no lower bound needed
         "black",
-        "fake-bpy-module",
         "marimo",
     ]
 
@@ -154,10 +153,6 @@ class Installer(Executor):
     if sys.version_info < (3, 10):
         dependencies.append("typing_extensions>=4.4.0")
 
-    def __init__(self):
-        super().__init__()
-        self.installed = False
-
     def get_required_modules(self) -> dict[str, bool]:
         modules = {d.split(">=")[0].strip(): False for d in self.dependencies}
         for m in pkgutil.iter_modules():
@@ -165,7 +160,6 @@ class Installer(Executor):
                 modules[m.name] = True
             elif m.name == "pymdownx":
                 modules["pymdown-extensions"] = True
-        modules['fake-bpy-module'] = self.installed
         return modules
 
     def install_python_modules(self, line_callback=None, finally_callback=None):
@@ -181,9 +175,6 @@ class Installer(Executor):
                 os.unlink(marimo_path)
                 print(f'Removed legacy marimo symlink: {marimo_path}')
 
-        def mark_installed():
-            self.installed = True
-
         cleanup_legacy_marimo_symlink()
 
         self.exec_command(
@@ -198,9 +189,7 @@ class Installer(Executor):
                 '--upgrade',
                 *[name for name, installed in self.get_required_modules().items() if not installed],
                 line_callback=line_callback,
-                finally_callback=lambda e: e.exec_function(
-                    mark_installed, line_callback=line_callback, finally_callback=finally_callback
-                )
+                finally_callback=finally_callback,
             )
         )
 
@@ -221,7 +210,6 @@ class Installer(Executor):
             *[name for name, installed in self.get_required_modules().items() if installed],
             line_callback=line_callback, finally_callback=finally_callback
         )
-        self.installed = False
 
     def list_python_modules(self, line_callback=None, finally_callback=None):
         self.exec_command(

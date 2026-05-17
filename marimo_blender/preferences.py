@@ -160,7 +160,7 @@ def draw_preferences(layout: bpy.types.UILayout, prefs: "MarimoAddonPreferences"
     flow = row.grid_flow(align=True)
 
     for name, is_installed in addon_setup.installer.get_required_modules().items():
-        flow.row().label(text=name, icon='CHECKMARK' if is_installed else 'REC' if name == 'fake-bpy-module' else 'ERROR')
+        flow.row().label(text=name, icon='CHECKMARK' if is_installed else 'ERROR')
 
     row = layout.row()
     row.operator(UninstallPythonModules.bl_idname)

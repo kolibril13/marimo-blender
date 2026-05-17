@@ -19,15 +19,6 @@ def _(bpy):
 
 @app.cell
 def _():
-    import subprocess
-    import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "drawdata"])
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "polars"])
-    return
-
-
-@app.cell
-def _():
     import marimo as mo
     mo.__version__
     return (mo,)
@@ -48,48 +39,48 @@ def _(mo):
 
 
 @app.cell
-def _(slider):
-    slider.value
-    return
-
-
-@app.cell
 def _(bpy, slider):
+    import math
     import random
 
-    # Make this cell depend on the button
     slider.value
 
-    # Delete everything
+    nx = 80
+    ny = 80
+    spacing = 0.15
+    height_scale = slider.value / 20
+
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete()
 
-    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+    vertices = []
+    faces = []
 
-    for i in range(100):
-        x = random.uniform(-5, 5)
-        y = random.uniform(-5, 5)
-        z = random.uniform(-1, 1)
+    for y in range(ny):
+        for x in range(nx):
+            z = (
+                math.sin(x * 0.25)
+                * math.cos(y * 0.25)
+                * height_scale
+            )
 
-        bpy.ops.mesh.primitive_uv_sphere_add(
-            radius=0.08,
-            location=(x, y, z),
-        )
+            vertices.append((
+                (x - nx / 2) * spacing,
+                (y - ny / 2) * spacing,
+                z,
+            ))
 
-        obj = bpy.data.objects[-1]
-        obj.name = f"Random_Sphere_{i}"
+    for y in range(ny - 1):
+        for x in range(nx - 1):
+            i = y * nx + x
+            faces.append((i, i + 1, i + nx + 1, i + nx))
 
-        hex_color = random.choice(colors).lstrip("#")
-        rgb = tuple(int(hex_color[j:j+2], 16) / 255 for j in (0, 2, 4))
+    mesh = bpy.data.meshes.new("Wave_Grid_Mesh")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
 
-        mat = bpy.data.materials.new(name=f"Mat_{i}")
-        mat.diffuse_color = (*rgb, 1.0)
-        obj.data.materials.append(mat)
-    return
-
-
-@app.cell
-def _():
+    obj = bpy.data.objects.new("Wave_Grid", mesh)
+    bpy.context.collection.objects.link(obj)
     return
 
 
