@@ -20,16 +20,16 @@ jobs:
         run: cp -p LICENSE marimo_blender/
 
       - name: Create a zip
-        run: zip -r -9 blender_notebook-${GITHUB_REF_NAME}.zip marimo_blender/
+        run: zip -r -9 marimo-blender-${GITHUB_REF_NAME}.zip marimo_blender/
 
       - name: Create a Release
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
-          name: Blender Notebook ${{ github.ref_name }}
+          name: marimo-blender ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           files: |
-            blender_notebook-${{ github.ref_name }}.zip
+            marimo-blender-${{ github.ref_name }}.zip
           draft: false
           generate_release_notes: true
           prerelease: false
