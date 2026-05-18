@@ -1,6 +1,10 @@
+import os
+
 import bpy
 
 from . import addon_setup
+
+_EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "examples")
 
 _LINES: list[str] = []
 
@@ -122,6 +126,32 @@ class StartMarimoServer(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class StartWithExample(bpy.types.Operator):
+    """Start Marimo server with a bundled example notebook"""
+    bl_idname = 'marimo.start_with_example'
+    bl_label = 'Start with Example'
+    bl_options = {'REGISTER', 'INTERNAL'}
+
+    filepath: bpy.props.StringProperty()
+
+    @classmethod
+    def poll(cls, context):
+        return not addon_setup.installer.is_running and not addon_setup.server.is_running
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__package__].preferences
+        prefs.filename = self.filepath
+        _LINES.clear()
+        region = context.region
+        addon_setup.server.start(
+            prefs.port,
+            prefs.filename,
+            line_callback=lambda line: _lines_append(line) or region.tag_redraw(),
+            finally_callback=lambda e: region.tag_redraw(),
+        )
+        return {'FINISHED'}
+
+
 class StopMarimoServer(bpy.types.Operator):
     """Stop Marimo Server if exist"""
     bl_idname = 'marimo.stop_server'
@@ -165,6 +195,10 @@ def draw_preferences(layout: bpy.types.UILayout, prefs: "MarimoAddonPreferences"
             big.scale_y = 1.4
             big.enabled = all_installed
             big.operator(StartMarimoServer.bl_idname, icon='URL', text="Start Notebook Server")
+            example_row = launch_body.row()
+            example_row.enabled = all_installed
+            op = example_row.operator(StartWithExample.bl_idname, icon='FILE_SCRIPT', text="Start with Example 1")
+            op.filepath = os.path.join(_EXAMPLES_DIR, "move_cube.py")
             if not all_installed:
                 launch_body.label(text="Install dependencies first ↓", icon='INFO')
 

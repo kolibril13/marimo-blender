@@ -7,6 +7,7 @@ from .preferences import (
     UninstallPythonModules,
     ListPythonModules,
     StartMarimoServer,
+    StartWithExample,
     StopMarimoServer,
     draw_preferences,
 )
@@ -35,6 +36,7 @@ classes = (
     UninstallPythonModules,
     ListPythonModules,
     StartMarimoServer,
+    StartWithExample,
     StopMarimoServer,
 )
 
