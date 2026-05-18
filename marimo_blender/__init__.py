@@ -47,7 +47,8 @@ def register():
 
 def unregister():
     bpy.types.VIEW3D_HT_header.remove(marimo_header_btn)
-    for cls in classes:
-        bpy.utils.unregister_class(cls)
+    for cls in reversed(classes):
+        if hasattr(cls, 'bl_rna'):
+            bpy.utils.unregister_class(cls)
     from . import main_thread
     main_thread.unregister()

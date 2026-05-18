@@ -175,7 +175,9 @@ def draw_preferences(layout: bpy.types.UILayout, prefs: "MarimoAddonPreferences"
         icon='CHECKMARK' if all_installed else 'ERROR',
     )
     if deps_body is not None:
-        deps_body.operator(InstallPythonModules.bl_idname, icon="PREFERENCES")
+        install_row = deps_body.row()
+        install_row.alert = not all_installed
+        install_row.operator(InstallPythonModules.bl_idname, icon="PREFERENCES")
 
         deps_body.label(text="Required Python Modules:")
         flow = deps_body.row(align=True).grid_flow(align=True)
@@ -183,8 +185,8 @@ def draw_preferences(layout: bpy.types.UILayout, prefs: "MarimoAddonPreferences"
             flow.row().label(text=name, icon='CHECKMARK' if is_installed else 'ERROR')
 
         row = deps_body.row()
-        row.operator(UninstallPythonModules.bl_idname)
-        row.operator(ListPythonModules.bl_idname)
+        row.operator(UninstallPythonModules.bl_idname, text="Uninstall")
+        row.operator(ListPythonModules.bl_idname, text="List Modules")
 
         row = deps_body.row(align=True)
         row.operator(InstallPythonModule.bl_idname, icon='PLUS', text='pip install').module_name = prefs.module_name
