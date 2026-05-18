@@ -201,16 +201,16 @@ def draw_preferences(layout: bpy.types.UILayout, prefs: "MarimoAddonPreferences"
             op = example_row.operator(StartWithExample.bl_idname, icon='FILE_SCRIPT', text="Example 1")
             op.filepath = os.path.join(_EXAMPLES_DIR, "move_cube.py")
 
-            altair_installed = importlib.util.find_spec('altair') is not None
+            ex2_deps_installed = all(importlib.util.find_spec(m) is not None for m in ('altair', 'pandas'))
             example2_row = launch_body.row(align=True)
             start_ex2 = example2_row.row()
-            start_ex2.enabled = all_installed and altair_installed
+            start_ex2.enabled = all_installed and ex2_deps_installed
             op2 = start_ex2.operator(StartWithExample.bl_idname, icon='FILE_SCRIPT', text="Example 2")
             op2.filepath = os.path.join(_EXAMPLES_DIR, "altair_cars.py")
-            install_altair = example2_row.row()
-            install_altair.enabled = not addon_setup.installer.is_running
-            op_install = install_altair.operator(InstallPythonModule.bl_idname, icon='IMPORT', text="Install altair")
-            op_install.module_name = "altair"
+            install_ex2 = example2_row.row()
+            install_ex2.enabled = not addon_setup.installer.is_running
+            op_install = install_ex2.operator(InstallPythonModule.bl_idname, icon='IMPORT', text="Install altair + pandas")
+            op_install.module_name = "altair pandas"
 
             if not all_installed:
                 launch_body.label(text="Install dependencies first ↓", icon='INFO')

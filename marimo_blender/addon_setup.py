@@ -150,7 +150,7 @@ class Installer(Executor):
             '--disable-pip-version-check',
             '--no-input',
             '--exists-action', 'i',
-            module_name,
+            *module_name.split(),
             line_callback=line_callback,
             finally_callback=finally_callback)
 
@@ -232,6 +232,7 @@ class Server(Executor):
                 loop_cls.remove_signal_handler = safe_remove
                 loop_patches.append((loop_cls, orig_add, orig_remove))
 
+            _registry_path = None
             try:
                 # Blender's cwd is often `/` (or the app bundle) when launched
                 # from the Dock, which marimo can't write to. Default new
@@ -240,6 +241,34 @@ class Server(Executor):
                     os.chdir(os.path.expanduser("~"))
 
                 self._port = find_free_port(port, addr="127.0.0.1")
+
+                # Write directly to the marimo-pair server registry so
+                # auto-discovery works (equivalent to running marimo --no-token).
+                # We bypass marimo's ServerRegistryWriter and write the JSON
+                # file directly to guarantee it's created before start() blocks.
+                try:
+                    import json
+                    from datetime import datetime, timezone
+                    from pathlib import Path
+                    _servers_dir = (
+                        Path(os.environ["XDG_STATE_HOME"])
+                        if "XDG_STATE_HOME" in os.environ
+                        else Path.home() / ".local" / "state"
+                    ) / "marimo" / "servers"
+                    _servers_dir.mkdir(parents=True, exist_ok=True)
+                    _registry_path = _servers_dir / f"127.0.0.1_{self._port}.json"
+                    _registry_path.write_text(json.dumps({
+                        "server_id": f"127.0.0.1:{self._port}",
+                        "pid": os.getpid(),
+                        "host": "127.0.0.1",
+                        "port": self._port,
+                        "base_url": "",
+                        "started_at": datetime.now(timezone.utc).isoformat(),
+                        "version": "unknown",
+                    }, indent=2))
+                except Exception:
+                    _registry_path = None
+
                 workspace = infer_workspace(filename) if filename else EmptyWorkspace()
                 start(
                     workspace=workspace,
@@ -260,6 +289,11 @@ class Server(Executor):
                     skew_protection=False,
                 )
             finally:
+                if _registry_path is not None:
+                    try:
+                        _registry_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
                 signal.signal = original_signal
                 for loop_cls, orig_add, orig_remove in loop_patches:
                     loop_cls.add_signal_handler = orig_add
