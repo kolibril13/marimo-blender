@@ -102,11 +102,9 @@ class Executor:
 
 class Installer(Executor):
     # marimo declares its full transitive dep set in its own Requires-Dist, so
-    # we let pip resolve those for us. `black` is an optional extra that
-    # marimo uses for cell formatting if present.
+    # we let pip resolve those for us.
     dependencies = [
         "marimo",
-        "black",
     ]
 
     def get_required_modules(self) -> dict[str, bool]:
