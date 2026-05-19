@@ -121,8 +121,7 @@ class StartMarimoServer(bpy.types.Operator):
                 finally_callback=lambda e: region.tag_redraw(),
             )
         else:
-            import webbrowser
-            webbrowser.open(f"http://127.0.0.1:{addon_setup.server.port}")
+            addon_setup.server.open_browser()
         return {'FINISHED'}
 
 
@@ -133,19 +132,23 @@ class StartWithExample(bpy.types.Operator):
     bl_options = {'REGISTER', 'INTERNAL'}
 
     filepath: bpy.props.StringProperty()
+    app_view: bpy.props.BoolProperty(default=False)
 
     @classmethod
     def poll(cls, context):
         return not addon_setup.installer.is_running and not addon_setup.server.is_running
 
     def execute(self, context):
+        from marimo._session.model import SessionMode
         prefs = context.preferences.addons[__package__].preferences
         prefs.filename = self.filepath
         _LINES.clear()
         region = context.region
+        mode = SessionMode.RUN if self.app_view else SessionMode.EDIT
         addon_setup.server.start(
             prefs.port,
             prefs.filename,
+            mode=mode,
             line_callback=lambda line: _lines_append(line) or region.tag_redraw(),
             finally_callback=lambda e: region.tag_redraw(),
         )
@@ -195,10 +198,14 @@ def draw_preferences(layout: bpy.types.UILayout, prefs: "MarimoAddonPreferences"
             big.scale_y = 1.4
             big.enabled = all_installed
             big.operator(StartMarimoServer.bl_idname, icon='URL', text="Start Notebook Server")
-            example_row = launch_body.row()
+            example_row = launch_body.row(align=True)
             example_row.enabled = all_installed
             op = example_row.operator(StartWithExample.bl_idname, icon='FILE_SCRIPT', text="Example 1")
             op.filepath = os.path.join(_EXAMPLES_DIR, "move_cube.py")
+            op.app_view = False
+            op = example_row.operator(StartWithExample.bl_idname, icon='PLAY', text="Example 1 (App)")
+            op.filepath = os.path.join(_EXAMPLES_DIR, "move_cube.py")
+            op.app_view = True
 
             if not all_installed:
                 launch_body.label(text="Install dependencies first ↓", icon='INFO')

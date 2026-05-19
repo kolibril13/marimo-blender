@@ -169,12 +169,33 @@ class Installer(Executor):
         )
 
 
+def _open_app_window(url: str, width: int = 340, height: int = 240):
+    """Open *url* in a chromeless app window. Falls back to webbrowser."""
+    import subprocess
+    chrome_candidates = [
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        'google-chrome',
+        'chromium-browser',
+        'chromium',
+    ]
+    for path in chrome_candidates:
+        try:
+            subprocess.Popen([path, f'--app={url}', f'--window-size={width},{height}'])
+            return
+        except (FileNotFoundError, OSError):
+            continue
+    import webbrowser
+    webbrowser.open(url)
+
+
 class Server(Executor):
     def __init__(self):
         super().__init__()
         self._port: int | None = None
+        self._app_view: bool = False
 
-    def start(self, port, filename, line_callback=None, finally_callback=None):
+    def start(self, port, filename, mode=None, line_callback=None, finally_callback=None):
         # Apply marimo patches + register the main-thread pump on Blender's
         # main thread BEFORE we spawn the server thread. The executor must be
         # registered before any session/kernel construction, and
@@ -183,12 +204,14 @@ class Server(Executor):
         marimo_patches.apply()
         main_thread.ensure_registered()
 
-        def server_thread_function(port: int, filename: str):
+        def server_thread_function(port: int, filename: str, mode):
             import signal
             from marimo._server.start import start
             from marimo._utils.net import find_free_port
             from marimo._session.model import SessionMode
             from marimo._server.tokens import AuthToken
+            if mode is None:
+                mode = SessionMode.EDIT
             from marimo._server.workspace import EmptyWorkspace, infer_workspace
             from marimo._cli.parse_args import parse_args
 
@@ -241,6 +264,16 @@ class Server(Executor):
                     os.chdir(os.path.expanduser("~"))
 
                 self._port = find_free_port(port, addr="127.0.0.1")
+                self._app_view = (mode == SessionMode.RUN)
+
+                if self._app_view:
+                    import threading as _threading
+                    _snap_port = self._port
+                    def _delayed_open():
+                        import time
+                        time.sleep(0.8)
+                        _open_app_window(f"http://127.0.0.1:{_snap_port}")
+                    _threading.Thread(target=_delayed_open, daemon=True).start()
 
                 # Write directly to the marimo-pair server registry so
                 # auto-discovery works (equivalent to running marimo --no-token).
@@ -272,12 +305,12 @@ class Server(Executor):
                 workspace = infer_workspace(filename) if filename else EmptyWorkspace()
                 start(
                     workspace=workspace,
-                    mode=SessionMode.EDIT,
+                    mode=mode,
                     development_mode=True,
                     quiet=False,
                     include_code=True,
                     ttl_seconds=None,
-                    headless=False,
+                    headless=(mode == SessionMode.RUN),
                     port=self._port,
                     host="127.0.0.1",
                     proxy=None,
@@ -299,7 +332,16 @@ class Server(Executor):
                     loop_cls.add_signal_handler = orig_add
                     loop_cls.remove_signal_handler = orig_remove
                 self._port = None
-        self.exec_function(server_thread_function, port, filename, line_callback=line_callback, finally_callback=finally_callback)
+                self._app_view = False
+        self.exec_function(server_thread_function, port, filename, mode, line_callback=line_callback, finally_callback=finally_callback)
+
+    def open_browser(self):
+        url = f"http://127.0.0.1:{self._port}"
+        if self._app_view:
+            _open_app_window(url)
+        else:
+            import webbrowser
+            webbrowser.open(url)
 
     def stop(self):
         """Signal the running uvicorn server to shut down. The server thread
