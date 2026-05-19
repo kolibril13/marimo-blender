@@ -171,6 +171,7 @@ class Installer(Executor):
 
 def _open_app_window(url: str, width: int = 340, height: int = 240):
     """Open *url* in a chromeless app window. Falls back to webbrowser."""
+    import os
     import subprocess
     chrome_candidates = [
         '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -179,9 +180,16 @@ def _open_app_window(url: str, width: int = 340, height: int = 240):
         'chromium-browser',
         'chromium',
     ]
+    profile_dir = os.path.expanduser('~/.marimo-blender-chrome-profile')
+
     for path in chrome_candidates:
         try:
-            subprocess.Popen([path, f'--app={url}', f'--window-size={width},{height}'])
+            subprocess.Popen([
+                path,
+                f'--app={url}',
+                f'--window-size={width},{height}',
+                f'--user-data-dir={profile_dir}',
+            ])
             return
         except (FileNotFoundError, OSError):
             continue
