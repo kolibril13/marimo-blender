@@ -22,8 +22,12 @@ _TIMER_REGISTERED = False
 _LOCK = threading.Lock()
 
 
-def _drain_callback() -> float:
+def _drain_callback() -> float | None:
     """Drain pending jobs on the main thread; called by bpy.app.timers."""
+    # Return None to self-unregister if fired after shutdown or during Python
+    # module finalization (when _QUEUE may already be None).
+    if not _TIMER_REGISTERED or _QUEUE is None:
+        return None
     while True:
         try:
             fn, args, kwargs, holder, event = _QUEUE.get_nowait()
@@ -54,6 +58,25 @@ def ensure_registered() -> None:
         _TIMER_REGISTERED = True
 
 
+def drain_sync() -> None:
+    """Drain pending jobs on the calling thread (main thread only).
+
+    Used during addon shutdown to process queued work while blocking the
+    main thread — the bpy timer cannot fire while we are spinning in unregister.
+    """
+    while True:
+        try:
+            fn, args, kwargs, holder, event = _QUEUE.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            holder["result"] = fn(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001
+            holder["error"] = exc
+        finally:
+            event.set()
+
+
 def unregister() -> None:
     """Unregister the timer. Safe to call from the main thread on shutdown."""
     global _TIMER_REGISTERED
@@ -65,6 +88,7 @@ def unregister() -> None:
         except (ValueError, RuntimeError):
             pass
         _TIMER_REGISTERED = False
+    drain_sync()
 
 
 def run_on_main(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -72,20 +96,22 @@ def run_on_main(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
 
     Blocks the calling thread until the main thread finishes the call.
     Re-raises any exception raised in the callee.
+    Returns None silently when called after the timer is unregistered (shutdown).
     """
-    if not _TIMER_REGISTERED:
-        # Safety net: if the timer hasn't been registered yet, the caller is
-        # using us before ensure_registered() ran on the main thread. Trying
-        # to register here from a non-main thread is unsafe, so error early.
-        raise RuntimeError(
-            "main_thread.ensure_registered() must be called on Blender's main "
-            "thread before run_on_main() is used."
-        )
+    if not _TIMER_REGISTERED or _QUEUE is None:
+        return None
 
     event = threading.Event()
     holder: dict[str, Any] = {}
     _QUEUE.put((fn, args, kwargs, holder, event))
-    event.wait()
+    # Poll with a short timeout instead of blocking indefinitely.  This lets
+    # ThreadPoolExecutor worker threads (used by execute_cell_async via
+    # loop.run_in_executor) exit cleanly when _TIMER_REGISTERED goes False
+    # between our enqueue and the wait, which would otherwise deadlock
+    # Python's concurrent.futures._python_exit atexit join.
+    while not event.wait(timeout=0.05):
+        if not _TIMER_REGISTERED or _QUEUE is None:
+            return None
     if "error" in holder:
         raise holder["error"]
     return holder.get("result")

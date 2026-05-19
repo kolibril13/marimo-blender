@@ -352,15 +352,53 @@ class Server(Executor):
             webbrowser.open(url)
 
     def stop(self):
-        """Signal the running uvicorn server to shut down. The server thread
-        exits once uvicorn drains its connections, flipping `is_running` to
-        False. The kernel threads are daemons and die with the process; we
-        don't try to force-stop them here.
+        """Shut down marimo's kernel sessions, then signal uvicorn to exit.
+
+        Stopping the sessions first is essential, not cosmetic. marimo only
+        wires SessionManager.shutdown() (which sends StopKernelCommand to each
+        kernel) to its signal-based InterruptHandler (SIGINT/SIGTERM). We
+        trigger shutdown programmatically via `should_exit`, so no signal ever
+        fires and the kernel is never told to stop. Its control loop then
+        stays blocked forever in `run_in_executor(None, control_queue.get)`.
+        That executor worker is a *non-daemon* thread, so Python's
+        `concurrent.futures.thread._python_exit` atexit handler blocks
+        joining it at interpreter shutdown — freezing Blender on quit.
+
+        Sending StopKernelCommand lets the control loop break, the kernel's
+        asyncio.run() finish, and its default executor shut down cleanly.
         """
         from . import marimo_patches
         uv_server = marimo_patches.get_running_uvicorn_server()
-        if uv_server is not None:
-            uv_server.should_exit = True
+        if uv_server is None:
+            return
+
+        try:
+            app = uv_server.config.app
+            session_manager = app.state.session_manager
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Could not reach marimo session manager: %s", exc)
+            session_manager = None
+
+        if session_manager is not None:
+            # Send StopKernelCommand directly first so the kernel control loop
+            # exits even if the broader shutdown() trips on event-loop-bound
+            # cleanup (room.close(), event bus) when called off the server
+            # thread. For threading kernels close_kernel() is just a
+            # thread-safe queue put and does not block.
+            try:
+                for session in list(session_manager.sessions.values()):
+                    try:
+                        session._kernel_manager.close_kernel()
+                    except Exception as exc:  # noqa: BLE001
+                        logging.warning("close_kernel failed: %s", exc)
+            except Exception as exc:  # noqa: BLE001
+                logging.warning("Iterating marimo sessions failed: %s", exc)
+            try:
+                session_manager.shutdown()
+            except Exception as exc:  # noqa: BLE001
+                logging.warning("marimo session manager shutdown failed: %s", exc)
+
+        uv_server.should_exit = True
 
     @property
     def port(self) -> int | None:
