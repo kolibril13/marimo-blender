@@ -41,6 +41,10 @@ classes = (
 )
 
 
+_SERVER_STOP_TIMEOUT = 3.0  # max seconds to wait for the uvicorn thread to exit
+_SERVER_DRAIN_INTERVAL = 0.01
+
+
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
@@ -56,13 +60,13 @@ def unregister():
         if hasattr(cls, 'bl_rna'):
             bpy.utils.unregister_class(cls)
 
-    # Signal the server to stop and wait up to 3 s for it to finish.
-    # We must drain the queue manually here because the bpy timer cannot fire
-    # while this function is blocking the main thread.
+    # Stop the server, then keep draining the main-thread queue until it exits.
+    # The drain must happen here because the bpy timer cannot fire while this
+    # function blocks the main thread.
     addon_setup.server.stop()
-    deadline = time.monotonic() + 3.0
+    deadline = time.monotonic() + _SERVER_STOP_TIMEOUT
     while addon_setup.server.is_running and time.monotonic() < deadline:
         main_thread.drain_sync()
-        time.sleep(0.01)
+        time.sleep(_SERVER_DRAIN_INTERVAL)
 
     main_thread.unregister()

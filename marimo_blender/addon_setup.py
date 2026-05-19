@@ -382,17 +382,14 @@ class Server(Executor):
         if session_manager is not None:
             # Send StopKernelCommand directly first so the kernel control loop
             # exits even if the broader shutdown() trips on event-loop-bound
-            # cleanup (room.close(), event bus) when called off the server
-            # thread. For threading kernels close_kernel() is just a
-            # thread-safe queue put and does not block.
-            try:
-                for session in list(session_manager.sessions.values()):
-                    try:
-                        session._kernel_manager.close_kernel()
-                    except Exception as exc:  # noqa: BLE001
-                        logging.warning("close_kernel failed: %s", exc)
-            except Exception as exc:  # noqa: BLE001
-                logging.warning("Iterating marimo sessions failed: %s", exc)
+            # cleanup (Session.close() runs room.close() before close_kernel()).
+            # For threading kernels close_kernel() is just a thread-safe queue
+            # put and does not block.
+            for session in list(session_manager.sessions.values()):
+                try:
+                    session._kernel_manager.close_kernel()
+                except Exception as exc:  # noqa: BLE001
+                    logging.warning("close_kernel failed: %s", exc)
             try:
                 session_manager.shutdown()
             except Exception as exc:  # noqa: BLE001
