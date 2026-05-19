@@ -6,9 +6,14 @@ A Blender add-on that runs a [marimo](https://marimo.io) reactive notebook serve
 
 # Changelog:
 
+
+v0.3.8
+
+- implement app view
+
 v0.3.7
 
-UI cleanup
+- UI cleanup
 
 v0.3.5
 
