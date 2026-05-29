@@ -33,3 +33,6 @@ jobs:
           draft: false
           generate_release_notes: true
           prerelease: false
+
+      - name: Trigger website rebuild
+        run: curl -X POST "${{ secrets.CF_DEPLOY_HOOK_URL }}"
