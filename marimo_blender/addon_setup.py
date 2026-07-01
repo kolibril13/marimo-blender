@@ -1,6 +1,8 @@
+import importlib.util
 import logging
 import os
 import pkgutil
+import shutil
 import subprocess
 import sys
 import threading
@@ -54,13 +56,13 @@ class Executor:
         for line in (l for f in traceback.format_exception(exception) for l in f.splitlines()):
             _invoke_callback(line_callback, line)
 
-    def exec_command(self, *args, line_callback=None, finally_callback: Callable[["Executor"], Any] = None):
+    def exec_command(self, *args, env=None, line_callback=None, finally_callback: Callable[["Executor"], Any] = None):
         if self.is_running:
             raise ValueError(f"Process is running: pid={self._process.pid}")
 
         self._exit_code = -1
         self._command_line = ' '.join(args)
-        self._process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self._process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
 
         def _enqueue_output():
             encoding = sys.getdefaultencoding()
@@ -101,6 +103,18 @@ class Executor:
 
 
 class Installer(Executor):
+    """Install/uninstall marimo into Blender's site-packages.
+
+    Installs prefer ``uv`` (``uv pip install --python <blender-python>
+    --target <site-packages>``), which is 10–100× faster than pip at
+    resolving and downloading the transitive closure. A system ``uv`` on
+    ``PATH`` (or in a common install dir) is used when present, otherwise an
+    importable ``uv`` whose binary actually exists. When neither is available
+    installs fall back to plain ``pip``, which is always present in Blender's
+    Python. Either way wheels land in a location already on Blender's
+    ``sys.path``.
+    """
+
     # marimo declares its full transitive dep set in its own Requires-Dist, so
     # we let pip resolve those for us.
     dependencies = [
@@ -113,6 +127,138 @@ class Installer(Executor):
             if m.name in modules:
                 modules[m.name] = True
         return modules
+
+    @staticmethod
+    def _find_system_uv() -> str | None:
+        """Locate a ``uv`` binary, tolerating a GUI-launched Blender's PATH.
+
+        ``shutil.which`` only searches ``os.environ["PATH"]``. When Blender
+        is launched from Finder/Dock (rather than a terminal) macOS gives it
+        a minimal PATH that omits the dirs where uv is usually installed
+        (Homebrew's ``/opt/homebrew/bin``, ``~/.local/bin``, ``~/.cargo/bin``,
+        …) because those are only added by the shell's startup files. So we
+        fall back to probing the common install locations directly.
+        """
+        found = shutil.which('uv')
+        if found:
+            return found
+        exe = 'uv.exe' if os.name == 'nt' else 'uv'
+        candidates = [
+            '/opt/homebrew/bin',  # Homebrew on Apple Silicon
+            '/usr/local/bin',  # Homebrew on Intel / manual installs
+            os.path.expanduser('~/.local/bin'),  # uv's own installer
+            os.path.expanduser('~/.cargo/bin'),  # cargo install uv
+        ]
+        for directory in candidates:
+            path = os.path.join(directory, exe)
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                return path
+        return None
+
+    @staticmethod
+    def _importable_uv_has_binary() -> bool:
+        """Whether an importable ``uv`` module can actually find its binary.
+
+        The ``uv`` *module* can be importable while the ``uv`` *binary* it
+        execs is absent — e.g. a prior ``pip install --target uv`` whose
+        scripts never landed where ``find_uv_bin`` looks. In that state
+        ``python -m uv`` raises ``UvNotFound``, so the module must not be
+        treated as a usable uv.
+        """
+        try:
+            import uv
+            uv.find_uv_bin()
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def _uv_command(cls) -> list[str] | None:
+        """How to invoke uv, preferring a uv already on the system.
+
+        Returns ``["<path>"]`` for a uv on ``PATH`` (or a common install
+        location), ``[python, "-m", "uv"]`` if the uv package is importable
+        *and* its binary exists, or ``None`` when no usable uv is available
+        (callers fall back to pip).
+        """
+        system_uv = cls._find_system_uv()
+        if system_uv:
+            return [system_uv]
+        if importlib.util.find_spec('uv') is not None and cls._importable_uv_has_binary():
+            return [sys.executable, '-m', 'uv']
+        return None
+
+    @classmethod
+    def _describe_uv(cls) -> str:
+        """Human-readable note for the log box about which installer is used."""
+        system_uv = cls._find_system_uv()
+        if system_uv:
+            return f"Using system uv: {system_uv}"
+        if cls._uv_command() is not None:
+            return f"Using bundled uv: {sys.executable} -m uv"
+        return f"No usable uv found — falling back to pip: {sys.executable} -m pip"
+
+    @staticmethod
+    def _subprocess_env(site_packages_path: str | None) -> dict[str, str] | None:
+        """Env that lets a fresh ``python -m uv`` import a uv installed into
+        the extension's ``--target`` site-packages (not on a subprocess's
+        default ``sys.path``)."""
+        if not site_packages_path:
+            return None
+        env = dict(os.environ)
+        existing = env.get('PYTHONPATH', '')
+        env['PYTHONPATH'] = site_packages_path + os.pathsep + existing if existing else site_packages_path
+        return env
+
+    def _run_command_chain(self, commands, env, line_callback, finally_callback) -> None:
+        """Run subprocess commands sequentially, aborting if one fails.
+
+        ``line_callback`` is forwarded to every command; ``finally_callback``
+        fires exactly once, after the last command or the first failure.
+        """
+        if not commands:
+            _invoke_callback(finally_callback, self)
+            return
+
+        head, *tail = commands
+
+        def _after(executor: "Executor") -> None:
+            if executor.exit_code != 0:
+                _invoke_callback(finally_callback, executor)
+                return
+            self._run_command_chain(tail, env, line_callback, finally_callback)
+
+        self.exec_command(*head, env=env, line_callback=line_callback, finally_callback=_after)
+
+    def _install_commands(self, packages, target_option) -> list[list[str]]:
+        """Command chain to install ``packages``.
+
+        Uses uv when one is genuinely usable (see :meth:`_uv_command`).
+        Otherwise falls back to plain ``pip install`` — always present in
+        Blender's Python — running ``ensurepip`` first only if pip is missing.
+        """
+        uv = self._uv_command()
+        if uv is not None:
+            return [[
+                *uv, 'pip', 'install',
+                '--python', sys.executable,
+                *target_option,
+                *packages,
+            ]]
+
+        commands = []
+        if importlib.util.find_spec('pip') is None:
+            commands.append([sys.executable, '-m', 'ensurepip'])
+        commands.append([
+            sys.executable, '-m', 'pip', 'install',
+            *target_option,
+            '--disable-pip-version-check',
+            '--no-input',
+            '--exists-action', 'i',
+            '--upgrade',
+            *packages,
+        ])
+        return commands
 
     def install_python_modules(self, line_callback=None, finally_callback=None):
         site_packages_path = next((p for p in sys.path if p.endswith('site-packages')), None)
@@ -128,31 +274,29 @@ class Installer(Executor):
                 os.unlink(marimo_path)
                 print(f'Removed legacy marimo symlink: {marimo_path}')
 
-        self.exec_command(
-            sys.executable, '-m', 'ensurepip',
-            line_callback=line_callback,
-            finally_callback=lambda e: e.exec_command(
-                sys.executable, '-m', 'pip', 'install',
-                *target_option,
-                '--disable-pip-version-check',
-                '--no-input',
-                '--exists-action', 'i',
-                '--upgrade',
-                *[name for name, installed in self.get_required_modules().items() if not installed],
-                line_callback=line_callback,
-                finally_callback=finally_callback,
-            )
+        missing = [name for name, installed in self.get_required_modules().items() if not installed]
+        if not missing:
+            # Still run the installer so the user gets feedback in the log box.
+            missing = list(self.dependencies)
+
+        _invoke_callback(line_callback, self._describe_uv())
+        self._run_command_chain(
+            self._install_commands(missing, target_option),
+            self._subprocess_env(site_packages_path),
+            line_callback,
+            finally_callback,
         )
 
     def install_python_module(self, module_name, line_callback=None, finally_callback=None):
-        self.exec_command(
-            sys.executable, '-m', 'pip', 'install',
-            '--disable-pip-version-check',
-            '--no-input',
-            '--exists-action', 'i',
-            *module_name.split(),
-            line_callback=line_callback,
-            finally_callback=finally_callback)
+        site_packages_path = next((p for p in sys.path if p.endswith('site-packages')), None)
+        target_option = ['--target', site_packages_path] if site_packages_path else []
+        _invoke_callback(line_callback, self._describe_uv())
+        self._run_command_chain(
+            self._install_commands(module_name.split(), target_option),
+            self._subprocess_env(site_packages_path),
+            line_callback,
+            finally_callback,
+        )
 
     def uninstall_python_modules(self, line_callback=None, finally_callback=None):
         self.exec_command(

@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 # Example of manifest file for a Blender extension
 # Change the values according to your extension
 id = "marimo_blender"
-version = "0.3.8"
+version = "0.3.9"
 name = "Marimo"
 tagline = "Reactive notebook for Python integrated in Blender"
 maintainer = "Dale Chan <imare32@outlook.com>, Jan-Hendrik Müller"
