@@ -1,3 +1,5 @@
+import importlib.machinery
+import importlib.metadata
 import importlib.util
 import logging
 import os
@@ -137,8 +139,12 @@ class Installer(Executor):
         """
         if self._modules_cache is None:
             importlib.invalidate_caches()
+            # PathFinder, not importlib.util.find_spec: the latter answers
+            # from sys.modules, so an already-imported marimo would still
+            # read as "installed" right after its files were uninstalled.
             self._modules_cache = {
-                name: importlib.util.find_spec(name) is not None
+                name: importlib.machinery.PathFinder.find_spec(name)
+                is not None
                 for name in (
                     re.split(r"[<>=!~\s\[]", d, maxsplit=1)[0]
                     for d in self.dependencies
@@ -326,13 +332,75 @@ class Installer(Executor):
             self._invalidating(finally_callback),
         )
 
+    @staticmethod
+    def _canonical(name: str) -> str:
+        return re.sub(r"[-_.]+", "-", name).lower()
+
+    def _target_removal_set(self, site_packages_path: str | None) -> list[str]:
+        """Our dependencies plus their transitive requirements, restricted to
+        distributions actually installed in the target site-packages.
+
+        Install pulls in marimo's whole dependency closure, so a proper
+        uninstall must remove that closure — not just ``marimo`` itself,
+        which would leave ~100 orphaned packages behind.
+        """
+        if not site_packages_path:
+            return []
+        in_target: dict[str, tuple[str, importlib.metadata.Distribution]] = {}
+        for dist in importlib.metadata.distributions(path=[site_packages_path]):
+            name = dist.metadata["Name"]
+            if name:
+                in_target[self._canonical(name)] = (name, dist)
+
+        stack = [
+            self._canonical(re.split(r"[<>=!~\s\[]", d, maxsplit=1)[0])
+            for d in self.dependencies
+        ]
+        seen: set[str] = set()
+        removal: list[str] = []
+        while stack:
+            key = stack.pop()
+            if key in seen or key not in in_target:
+                continue
+            seen.add(key)
+            name, dist = in_target[key]
+            removal.append(name)
+            for req in dist.requires or []:
+                stack.append(
+                    self._canonical(re.split(r"[<>=!~;\s\[(]", req, maxsplit=1)[0])
+                )
+        return removal
+
     def uninstall_python_modules(self, line_callback=None, finally_callback=None):
-        self.exec_command(
-            sys.executable, '-m', 'pip', 'uninstall',
-            '--yes',
-            *[name for name, installed in self.get_required_modules().items() if installed],
-            line_callback=line_callback,
-            finally_callback=self._invalidating(finally_callback),
+        site_packages_path = next((p for p in sys.path if p.endswith('site-packages')), None)
+        packages = self._target_removal_set(site_packages_path)
+        if not packages:
+            _invoke_callback(line_callback, "Nothing to uninstall.")
+            self.invalidate_modules_cache()
+            _invoke_callback(finally_callback, self)
+            return
+
+        _invoke_callback(line_callback, self._describe_uv())
+        uv = self._uv_command()
+        if uv is not None:
+            commands = [[
+                *uv, 'pip', 'uninstall',
+                '--python', sys.executable,
+                '--target', site_packages_path,
+                *packages,
+            ]]
+        else:
+            # pip has no --target for uninstall; _subprocess_env puts the
+            # target site-packages on the subprocess's PYTHONPATH so pip can
+            # find (and remove) the distributions installed there.
+            commands = [[
+                sys.executable, '-m', 'pip', 'uninstall', '--yes', *packages,
+            ]]
+        self._run_command_chain(
+            commands,
+            self._subprocess_env(site_packages_path),
+            line_callback,
+            self._invalidating(finally_callback),
         )
 
     def list_python_modules(self, line_callback=None, finally_callback=None):

@@ -67,7 +67,12 @@ class UninstallPythonModules(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return not addon_setup.installer.is_running
+        # Also blocked while the server runs: uninstalling would pull
+        # marimo's files out from under the live kernel.
+        return (
+            not addon_setup.installer.is_running
+            and not addon_setup.server.is_running
+        )
 
     def execute(self, context):
         _LINES.clear()
