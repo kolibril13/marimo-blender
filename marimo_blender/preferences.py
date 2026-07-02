@@ -16,6 +16,36 @@ def _lines_append(line: str):
     _LINES.append(line)
 
 
+def _tag_redraw_sidebars():
+    """Tag the View3D sidebar regions for redraw. Main thread only."""
+    for wm in bpy.data.window_managers:
+        for window in wm.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    for region in area.regions:
+                        if region.type == 'UI':
+                            region.tag_redraw()
+    return None
+
+
+def _request_redraw(*_args):
+    """Thread-safe redraw request for the installer/server callbacks.
+
+    Worker threads must not call region.tag_redraw() directly: tagging
+    doesn't wake Blender's event loop, so with an idle UI the update (log
+    lines, the final "Done" state) only renders on the next input event —
+    completion appears to take seconds until the mouse moves. Registering
+    a timer is thread-safe, wakes the event loop immediately, and runs the
+    tagging on the main thread. is_registered coalesces bursts of log
+    lines into a single pending redraw.
+    """
+    try:
+        if not bpy.app.timers.is_registered(_tag_redraw_sidebars):
+            bpy.app.timers.register(_tag_redraw_sidebars, first_interval=0.0)
+    except ValueError:
+        pass  # lost a register race with another worker thread — fine
+
+
 class InstallPythonModules(bpy.types.Operator):
     """Install Python Module marimo dependencies"""
     bl_idname = 'marimo.install_python_modules'
@@ -28,10 +58,9 @@ class InstallPythonModules(bpy.types.Operator):
 
     def execute(self, context):
         _LINES.clear()
-        region = context.region
         addon_setup.installer.install_python_modules(
-            line_callback=lambda line: _lines_append(line) or region.tag_redraw(),
-            finally_callback=lambda e: region.tag_redraw(),
+            line_callback=lambda line: _lines_append(line) or _request_redraw(),
+            finally_callback=_request_redraw,
         )
         return {'FINISHED'}
 
@@ -50,11 +79,10 @@ class InstallPythonModule(bpy.types.Operator):
 
     def execute(self, context):
         _LINES.clear()
-        region = context.region
         addon_setup.installer.install_python_module(
             self.module_name,
-            line_callback=lambda line: _lines_append(line) or region.tag_redraw(),
-            finally_callback=lambda e: region.tag_redraw(),
+            line_callback=lambda line: _lines_append(line) or _request_redraw(),
+            finally_callback=_request_redraw,
         )
         return {'FINISHED'}
 
@@ -76,10 +104,9 @@ class UninstallPythonModules(bpy.types.Operator):
 
     def execute(self, context):
         _LINES.clear()
-        region = context.region
         addon_setup.installer.uninstall_python_modules(
-            line_callback=lambda line: _lines_append(line) or region.tag_redraw(),
-            finally_callback=lambda e: region.tag_redraw(),
+            line_callback=lambda line: _lines_append(line) or _request_redraw(),
+            finally_callback=_request_redraw,
         )
         return {'FINISHED'}
 
@@ -96,10 +123,9 @@ class ListPythonModules(bpy.types.Operator):
 
     def execute(self, context):
         _LINES.clear()
-        region = context.region
         addon_setup.installer.list_python_modules(
-            line_callback=lambda line: _lines_append(line) or region.tag_redraw(),
-            finally_callback=lambda e: region.tag_redraw(),
+            line_callback=lambda line: _lines_append(line) or _request_redraw(),
+            finally_callback=_request_redraw,
         )
         return {'FINISHED'}
 
@@ -117,13 +143,12 @@ class StartMarimoServer(bpy.types.Operator):
     def execute(self, context):
         if not addon_setup.server.is_running:
             _LINES.clear()
-            region = context.region
             prefs = context.preferences.addons[__package__].preferences
             addon_setup.server.start(
                 prefs.port,
                 prefs.filename,
-                line_callback=lambda line: _lines_append(line) or region.tag_redraw(),
-                finally_callback=lambda e: region.tag_redraw(),
+                line_callback=lambda line: _lines_append(line) or _request_redraw(),
+                finally_callback=_request_redraw,
             )
         else:
             addon_setup.server.open_browser()
@@ -148,14 +173,13 @@ class StartWithExample(bpy.types.Operator):
         prefs = context.preferences.addons[__package__].preferences
         prefs.filename = self.filepath
         _LINES.clear()
-        region = context.region
         mode = SessionMode.RUN if self.app_view else SessionMode.EDIT
         addon_setup.server.start(
             prefs.port,
             prefs.filename,
             mode=mode,
-            line_callback=lambda line: _lines_append(line) or region.tag_redraw(),
-            finally_callback=lambda e: region.tag_redraw(),
+            line_callback=lambda line: _lines_append(line) or _request_redraw(),
+            finally_callback=_request_redraw,
         )
         return {'FINISHED'}
 
