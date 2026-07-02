@@ -81,7 +81,7 @@ def _register_main_thread_executor() -> None:
     import asyncio
 
     from marimo._runtime.context.types import _THREAD_LOCAL_CONTEXT
-    from marimo._runtime.executor import _EXECUTOR_REGISTRY, Executor
+    from marimo._runtime.executor import _EXECUTOR_REGISTRY, DefaultExecutor
 
     from . import main_thread
 
@@ -93,16 +93,24 @@ def _register_main_thread_executor() -> None:
         finally:
             _THREAD_LOCAL_CONTEXT.runtime_context = prev
 
-    class MainThreadExecutor(Executor):
-        def execute_cell(self, cell, glbls, graph):
-            assert self.base is not None
+    class MainThreadExecutor:
+        """Satisfies the `Executor` protocol; replaces DefaultExecutor
+        entirely (marimo >= 0.23 no longer composes over a base), so we
+        wrap our own DefaultExecutor instance.
+        """
+
+        name = "marimo-blender-main-thread"
+
+        def __init__(self) -> None:
+            self.base = DefaultExecutor()
+
+        def execute_cell(self, cell, glbls):
             ctx = getattr(_THREAD_LOCAL_CONTEXT, "runtime_context", None)
             return main_thread.run_on_main(
-                _run_with_ctx, ctx, self.base.execute_cell, cell, glbls, graph
+                _run_with_ctx, ctx, self.base.execute_cell, cell, glbls
             )
 
-        async def execute_cell_async(self, cell, glbls, graph):
-            assert self.base is not None
+        async def execute_cell_async(self, cell, glbls):
             # Cells with top-level `await` aren't supported on the main thread
             # here; we synchronously exec on the main thread via the sync path
             # so bpy operations are safe. Offload the blocking wait to a thread
@@ -117,9 +125,10 @@ def _register_main_thread_executor() -> None:
                 self.base.execute_cell,
                 cell,
                 glbls,
-                graph,
             )
 
+    # The registry stores factories: the kernel calls the registered value
+    # with no args to construct the executor instance.
     _EXECUTOR_REGISTRY.register(
         "marimo-blender-main-thread", MainThreadExecutor
     )
@@ -193,6 +202,18 @@ def _patch_kernel_manager() -> None:
             "stream_queue must exist; QueueManagerImpl must be patched first"
         )
 
+        # Force the module autoreloader off regardless of the user's marimo
+        # config. Its per-cell-run check calls os.path.realpath on every
+        # entry in sys.modules, and Blender's process carries thousands of
+        # modules (bpy, addons, bundled libs) — ~80ms per run, capping UI
+        # updates at ~12fps. Hot-reloading modules inside Blender's shared
+        # process would be unsafe anyway.
+        user_config = self.config_manager.get_config(hide_secrets=False)
+        user_config = {
+            **user_config,
+            "runtime": {**user_config["runtime"], "auto_reload": "off"},
+        }
+
         if self.redirect_console_to_browser:
             from marimo._messaging.thread_local_streams import (
                 install_thread_local_proxies,
@@ -218,7 +239,7 @@ def _patch_kernel_manager() -> None:
                 is_edit_mode,
                 self.configs,
                 self.app_metadata,
-                self.config_manager.get_config(hide_secrets=False),
+                user_config,
                 self._virtual_file_storage,
                 self.redirect_console_to_browser,
                 None,  # win32 interrupt queue
