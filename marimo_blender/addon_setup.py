@@ -1,7 +1,7 @@
 import importlib.util
 import logging
 import os
-import pkgutil
+import re
 import shutil
 import subprocess
 import sys
@@ -116,17 +116,45 @@ class Installer(Executor):
     """
 
     # marimo declares its full transitive dep set in its own Requires-Dist, so
-    # we let pip resolve those for us.
+    # we let pip resolve those for us. Pinned to the 0.23 series: our
+    # MainThreadExecutor in marimo_patches targets the executor API introduced
+    # in 0.23 (no `graph` arg, factory registry, no base composition).
     dependencies = [
-        "marimo",
+        "marimo>=0.23,<0.24",
     ]
 
+    def __init__(self):
+        super().__init__()
+        self._modules_cache: dict[str, bool] | None = None
+
     def get_required_modules(self) -> dict[str, bool]:
-        modules = {d.split(">=")[0].strip(): False for d in self.dependencies}
-        for m in pkgutil.iter_modules():
-            if m.name in modules:
-                modules[m.name] = True
-        return modules
+        """Map each required module name to whether it is importable.
+
+        Cached: the sidebar panel calls this on every redraw, and probing
+        the filesystem per redraw makes the whole UI sticky once
+        site-packages is populated. Install/uninstall completion
+        invalidates the cache (see :meth:`_invalidating`).
+        """
+        if self._modules_cache is None:
+            importlib.invalidate_caches()
+            self._modules_cache = {
+                name: importlib.util.find_spec(name) is not None
+                for name in (
+                    re.split(r"[<>=!~\s\[]", d, maxsplit=1)[0]
+                    for d in self.dependencies
+                )
+            }
+        return self._modules_cache
+
+    def invalidate_modules_cache(self) -> None:
+        self._modules_cache = None
+
+    def _invalidating(self, finally_callback):
+        """Wrap a finally_callback so completion refreshes the module cache."""
+        def _finally(executor: "Executor") -> None:
+            self.invalidate_modules_cache()
+            _invoke_callback(finally_callback, executor)
+        return _finally
 
     @staticmethod
     def _find_system_uv() -> str | None:
@@ -284,7 +312,7 @@ class Installer(Executor):
             self._install_commands(missing, target_option),
             self._subprocess_env(site_packages_path),
             line_callback,
-            finally_callback,
+            self._invalidating(finally_callback),
         )
 
     def install_python_module(self, module_name, line_callback=None, finally_callback=None):
@@ -295,7 +323,7 @@ class Installer(Executor):
             self._install_commands(module_name.split(), target_option),
             self._subprocess_env(site_packages_path),
             line_callback,
-            finally_callback,
+            self._invalidating(finally_callback),
         )
 
     def uninstall_python_modules(self, line_callback=None, finally_callback=None):
@@ -303,7 +331,8 @@ class Installer(Executor):
             sys.executable, '-m', 'pip', 'uninstall',
             '--yes',
             *[name for name, installed in self.get_required_modules().items() if installed],
-            line_callback=line_callback, finally_callback=finally_callback
+            line_callback=line_callback,
+            finally_callback=self._invalidating(finally_callback),
         )
 
     def list_python_modules(self, line_callback=None, finally_callback=None):

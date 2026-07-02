@@ -219,6 +219,7 @@ def draw_preferences(layout: bpy.types.UILayout, prefs: "MarimoAddonPreferences"
     if deps_body is not None:
         install_row = deps_body.row()
         install_row.alert = not all_installed
+        install_row.enabled = not all_installed
         install_row.operator(InstallPythonModules.bl_idname, icon="PREFERENCES")
 
         deps_body.label(text="Required Python Modules:")
