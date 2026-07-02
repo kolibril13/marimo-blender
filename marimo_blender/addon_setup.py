@@ -371,6 +371,51 @@ class Installer(Executor):
                 )
         return removal
 
+    def _unload_target_modules(self, site_packages_path: str, packages: list[str], line_callback=None) -> None:
+        """Purge the removed distributions' modules from ``sys.modules``.
+
+        Deleting files from disk does not touch the running interpreter: an
+        already-imported ``marimo`` stays importable until Blender restarts,
+        and a later re-install would keep serving the stale in-memory modules
+        instead of the fresh code. Must run *before* the uninstall subprocess,
+        while each dist's file list / ``top_level.txt`` is still on disk.
+        """
+        removal = {self._canonical(p) for p in packages}
+        top_level: set[str] = set()
+        for dist in importlib.metadata.distributions(path=[site_packages_path]):
+            name = dist.metadata["Name"]
+            if not name or self._canonical(name) not in removal:
+                continue
+            text = dist.read_text("top_level.txt")
+            if text:
+                top_level.update(line.strip() for line in text.splitlines() if line.strip())
+                continue
+            # Wheels built with hatchling/flit ship no top_level.txt; derive
+            # the importable names from the installed file list instead.
+            for file in dist.files or []:
+                root = file.parts[0]
+                if root in ("..", "__pycache__") or root.endswith((".dist-info", ".data")):
+                    continue
+                if root.endswith(".py"):
+                    top_level.add(root[:-3])
+                elif root.endswith((".so", ".pyd")):
+                    top_level.add(root.split(".", 1)[0])
+                elif "." not in root:
+                    top_level.add(root)
+
+        prefix = os.path.realpath(site_packages_path) + os.sep
+        unloaded = 0
+        for module_name in list(sys.modules):
+            if module_name.split(".", 1)[0] not in top_level:
+                continue
+            origin = getattr(sys.modules[module_name], "__file__", None)
+            if origin and not os.path.realpath(origin).startswith(prefix):
+                continue  # same name, but imported from outside the target
+            del sys.modules[module_name]
+            unloaded += 1
+        if unloaded:
+            _invoke_callback(line_callback, f"Unloaded {unloaded} module(s) from the running interpreter.")
+
     def uninstall_python_modules(self, line_callback=None, finally_callback=None):
         site_packages_path = next((p for p in sys.path if p.endswith('site-packages')), None)
         packages = self._target_removal_set(site_packages_path)
@@ -380,6 +425,7 @@ class Installer(Executor):
             _invoke_callback(finally_callback, self)
             return
 
+        self._unload_target_modules(site_packages_path, packages, line_callback)
         _invoke_callback(line_callback, self._describe_uv())
         uv = self._uv_command()
         if uv is not None:
