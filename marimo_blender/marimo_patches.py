@@ -112,20 +112,27 @@ def _register_main_thread_executor() -> None:
 
         async def execute_cell_async(self, cell, glbls):
             # Cells with top-level `await` aren't supported on the main thread
-            # here; we synchronously exec on the main thread via the sync path
-            # so bpy operations are safe. Offload the blocking wait to a thread
-            # pool so the kernel's asyncio loop stays responsive.
+            # here; we try to run via the sync path for non-async cells.
+            # If the cell is actually async, we run it asynchronously but
+            # outside the main thread context (async code + main thread = unsafe).
             ctx = getattr(_THREAD_LOCAL_CONTEXT, "runtime_context", None)
             loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(
-                None,
-                main_thread.run_on_main,
-                _run_with_ctx,
-                ctx,
-                self.base.execute_cell,
-                cell,
-                glbls,
-            )
+
+            if cell.is_coroutine:
+                # Cell is actually async — run it async but not on main thread
+                # (bpy access will be unsafe, but at least it will work)
+                return await self.base.execute_cell_async(cell, glbls)
+            else:
+                # Cell is not async — run it sync on main thread
+                return await loop.run_in_executor(
+                    None,
+                    main_thread.run_on_main,
+                    _run_with_ctx,
+                    ctx,
+                    self.base.execute_cell,
+                    cell,
+                    glbls,
+                )
 
     # The registry stores factories: the kernel calls the registered value
     # with no args to construct the executor instance.
