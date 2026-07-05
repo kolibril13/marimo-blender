@@ -13,18 +13,12 @@ def _():
     import bpy
     import marimo as mo
 
-    REPO = "/Users/jan-hendrik/projects/caputre_motion"  # <-- adjust if moved
-
     # anywidget etc. must live in BLENDER's bundled Python (this kernel).
     for pkg in ("anywidget", "traitlets", "ipywidgets"):
         try:
             __import__(pkg)
         except ImportError:
             subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
-
-    src = f"{REPO}/src_widget"
-    if src not in sys.path:
-        sys.path.insert(0, src)
 
     from gesture_widget import GestureRecognizerWidget
 
