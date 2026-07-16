@@ -129,8 +129,18 @@ class Installer(Executor):
         super().__init__()
         self._modules_cache: dict[str, bool] | None = None
 
+    @staticmethod
+    def _site_packages_path() -> str | None:
+        return next((p for p in sys.path if p.endswith('site-packages')), None)
+
     def get_required_modules(self) -> dict[str, bool]:
-        """Map each required module name to whether it is importable.
+        """Map each required module name to whether it is installed in the
+        managed site-packages.
+
+        Scoped to the managed site-packages, not all of ``sys.path``: a copy
+        installed elsewhere (e.g. Blender's bundled site-packages) would
+        otherwise make a dependency look installed, so Install would skip it
+        and the stale copy would keep being imported.
 
         Cached: the sidebar panel calls this on every redraw, and probing
         the filesystem per redraw makes the whole UI sticky once
@@ -139,11 +149,15 @@ class Installer(Executor):
         """
         if self._modules_cache is None:
             importlib.invalidate_caches()
+            site_packages_path = self._site_packages_path()
+            search_path = [site_packages_path] if site_packages_path else None
             # PathFinder, not importlib.util.find_spec: the latter answers
             # from sys.modules, so an already-imported marimo would still
             # read as "installed" right after its files were uninstalled.
             self._modules_cache = {
-                name: importlib.machinery.PathFinder.find_spec(name)
+                name: importlib.machinery.PathFinder.find_spec(
+                    name, path=search_path
+                )
                 is not None
                 for name in (
                     re.split(r"[<>=!~\s\[]", d, maxsplit=1)[0]
@@ -273,8 +287,11 @@ class Installer(Executor):
         """
         uv = self._uv_command()
         if uv is not None:
+            # --upgrade so an existing install moves to the latest release
+            # (within the version pin) instead of being audited as satisfied.
             return [[
                 *uv, 'pip', 'install',
+                '--upgrade',
                 '--python', sys.executable,
                 *target_option,
                 *packages,
@@ -294,8 +311,41 @@ class Installer(Executor):
         ])
         return commands
 
+    def _warn_shadowing_copies(self, site_packages_path, line_callback) -> None:
+        """Report copies of our dependencies installed outside the managed
+        site-packages (e.g. Blender's bundled one).
+
+        Those copies are not touched by install/uninstall here, but they
+        keep the modules importable — so a stale version can silently be
+        used whenever the managed dir has no copy. Not removed
+        automatically: other add-ons may rely on them.
+        """
+        wanted = {
+            self._canonical(re.split(r"[<>=!~\s\[]", d, maxsplit=1)[0])
+            for d in self.dependencies
+        }
+        other_paths = [
+            p
+            for p in sys.path
+            if p.endswith('site-packages')
+            and p != site_packages_path
+            and os.path.isdir(p)
+        ]
+        for path in other_paths:
+            for dist in importlib.metadata.distributions(path=[path]):
+                name = dist.metadata["Name"]
+                if not name or self._canonical(name) not in wanted:
+                    continue
+                _invoke_callback(
+                    line_callback,
+                    f"Warning: {name} {dist.version} is also installed in "
+                    f"{path} (not managed by this extension) and may shadow "
+                    f"the managed copy. Remove it with: "
+                    f"{sys.executable} -m pip uninstall {name}",
+                )
+
     def install_python_modules(self, line_callback=None, finally_callback=None):
-        site_packages_path = next((p for p in sys.path if p.endswith('site-packages')), None)
+        site_packages_path = self._site_packages_path()
         target_option = ['--target', site_packages_path] if site_packages_path else []
 
         # Migration path: users coming from the old vendored-marimo addon
@@ -314,6 +364,7 @@ class Installer(Executor):
             missing = list(self.dependencies)
 
         _invoke_callback(line_callback, self._describe_uv())
+        self._warn_shadowing_copies(site_packages_path, line_callback)
         self._run_command_chain(
             self._install_commands(missing, target_option),
             self._subprocess_env(site_packages_path),
@@ -322,7 +373,7 @@ class Installer(Executor):
         )
 
     def install_python_module(self, module_name, line_callback=None, finally_callback=None):
-        site_packages_path = next((p for p in sys.path if p.endswith('site-packages')), None)
+        site_packages_path = self._site_packages_path()
         target_option = ['--target', site_packages_path] if site_packages_path else []
         _invoke_callback(line_callback, self._describe_uv())
         self._run_command_chain(
@@ -417,7 +468,8 @@ class Installer(Executor):
             _invoke_callback(line_callback, f"Unloaded {unloaded} module(s) from the running interpreter.")
 
     def uninstall_python_modules(self, line_callback=None, finally_callback=None):
-        site_packages_path = next((p for p in sys.path if p.endswith('site-packages')), None)
+        site_packages_path = self._site_packages_path()
+        self._warn_shadowing_copies(site_packages_path, line_callback)
         packages = self._target_removal_set(site_packages_path)
         if not packages:
             _invoke_callback(line_callback, "Nothing to uninstall.")
@@ -450,8 +502,11 @@ class Installer(Executor):
         )
 
     def list_python_modules(self, line_callback=None, finally_callback=None):
+        # PYTHONPATH via _subprocess_env so the listing includes the managed
+        # site-packages — a bare `pip list` only sees Blender's bundled one.
         self.exec_command(
             sys.executable, '-m', 'pip', 'list', '-v',
+            env=self._subprocess_env(self._site_packages_path()),
             line_callback=line_callback, finally_callback=finally_callback
         )
 
