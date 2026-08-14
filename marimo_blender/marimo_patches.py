@@ -118,7 +118,10 @@ def _register_main_thread_executor() -> None:
             ctx = getattr(_THREAD_LOCAL_CONTEXT, "runtime_context", None)
             loop = asyncio.get_running_loop()
 
-            if cell.is_coroutine:
+            # `is_coroutine` is a method, not a property — calling it is not
+            # optional: the bound method object is always truthy, which would
+            # send every cell down the async branch and bypass the main thread.
+            if cell.is_coroutine():
                 # Cell is actually async — run it async but not on main thread
                 # (bpy access will be unsafe, but at least it will work)
                 return await self.base.execute_cell_async(cell, glbls)

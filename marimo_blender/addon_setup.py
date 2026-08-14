@@ -118,11 +118,12 @@ class Installer(Executor):
     """
 
     # marimo declares its full transitive dep set in its own Requires-Dist, so
-    # we let pip resolve those for us. Pinned to the 0.23 series: our
-    # MainThreadExecutor in marimo_patches targets the executor API introduced
-    # in 0.23 (no `graph` arg, factory registry, no base composition).
+    # we let pip resolve those for us. Floor is 0.23.9: that is the release
+    # where `Executor.execute_cell` lost its `graph` argument, which is the
+    # signature our MainThreadExecutor in marimo_patches implements (0.23.0–
+    # 0.23.8 still pass `graph`). Ceiling keeps us inside the 0.23 series.
     dependencies = [
-        "marimo>=0.23,<0.24",
+        "marimo>=0.23.9,<0.24",
     ]
 
     def __init__(self):
