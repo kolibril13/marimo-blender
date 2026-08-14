@@ -25,7 +25,7 @@ website = "https://github.com/iplai/marimo-blender"
 # https://docs.blender.org/manual/en/dev/extensions/tags.html
 tags = ["Development", "System"]
 
-blender_version_min = "5.1.0"
+blender_version_min = "5.2.0"
 # Optional: maximum supported Blender version
 # blender_version_max = "5.1.0"
 
