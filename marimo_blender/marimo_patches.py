@@ -17,6 +17,7 @@ crash on complex operations.
 """
 from __future__ import annotations
 
+import inspect
 import os
 import threading
 from typing import Any
@@ -207,7 +208,9 @@ def _patch_kernel_manager() -> None:
     from marimo._runtime import runtime
     from marimo._session.managers import kernel as kernel_mod
 
-    def patched_start_kernel(self) -> None:
+    original_start_kernel = kernel_mod.KernelManagerImpl.start_kernel
+
+    def start_kernel_impl(self) -> None:
         assert self.queue_manager.stream_queue is not None, (
             "stream_queue must exist; QueueManagerImpl must be patched first"
         )
@@ -260,5 +263,15 @@ def _patch_kernel_manager() -> None:
             name="marimo-kernel",
         )
         self.kernel_task.start()
+
+    # marimo >= 0.24 made start_kernel a coroutine (the subprocess path now
+    # awaits the kernel's connect-back). Our replacement never blocks, but it
+    # has to match: the caller awaits whatever start_kernel returns.
+    if inspect.iscoroutinefunction(original_start_kernel):
+        async def patched_start_kernel(self) -> None:
+            start_kernel_impl(self)
+    else:
+        def patched_start_kernel(self) -> None:
+            start_kernel_impl(self)
 
     kernel_mod.KernelManagerImpl.start_kernel = patched_start_kernel

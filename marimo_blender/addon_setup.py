@@ -1,6 +1,7 @@
 import importlib.machinery
 import importlib.metadata
 import importlib.util
+import inspect
 import logging
 import os
 import re
@@ -121,9 +122,12 @@ class Installer(Executor):
     # we let pip resolve those for us. Floor is 0.23.9: that is the release
     # where `Executor.execute_cell` lost its `graph` argument, which is the
     # signature our MainThreadExecutor in marimo_patches implements (0.23.0–
-    # 0.23.8 still pass `graph`). Ceiling keeps us inside the 0.23 series.
+    # 0.23.8 still pass `graph`). Ceiling is the highest series the patches in
+    # marimo_patches have been checked against; 0.24 turned
+    # KernelManagerImpl.start_kernel and SessionManager.shutdown into
+    # coroutines, which both call sites now detect at runtime.
     dependencies = [
-        "marimo>=0.23.9,<0.24",
+        "marimo>=0.23.9,<0.26",
     ]
 
     def __init__(self):
@@ -540,6 +544,65 @@ def _open_app_window(url: str, width: int = 340, height: int = 240):
     webbrowser.open(url)
 
 
+# Modules Blender imports while starting up, from its own bundled
+# site-packages, before any extension code runs. `sys.modules` pins whichever
+# copy was imported first, so a newer copy in the managed site-packages is
+# never used — even though that directory sits *earlier* on `sys.path`.
+#
+# `typing_extensions` is the one that matters: Blender 5.2 bundles 4.14.1 and
+# imports it during startup (via cattrs, for the extensions system), while
+# anyio >= 4.15 — pulled in by starlette, which marimo's server runs on —
+# does `from typing_extensions import sentinel` and needs >= 4.16.0. Without
+# this, every marimo HTTP route answers 500 with "cannot import name
+# 'sentinel' from 'typing_extensions'".
+_SHADOWED_MODULES = ('typing_extensions',)
+
+
+def prefer_managed_modules(names=_SHADOWED_MODULES, line_callback=None) -> None:
+    """Re-import `names` from the managed site-packages when the copy already
+    in `sys.modules` came from somewhere else (usually Blender's bundled
+    site-packages).
+
+    Only modules that the managed site-packages actually provides are
+    touched; anything else keeps the copy it has. Already-imported modules
+    hold on to the names they bound from the old copy, which is fine for
+    pure-Python compatibility shims like `typing_extensions` — do not extend
+    this to C extensions (numpy & co.), where two live copies are unsafe.
+    """
+    site_packages_path = Installer._site_packages_path()
+    if not site_packages_path:
+        return
+    prefix = os.path.realpath(site_packages_path) + os.sep
+    importlib.invalidate_caches()
+    for name in names:
+        stale = sys.modules.get(name)
+        if stale is None:
+            continue  # not imported yet: normal sys.path order will win
+        origin = getattr(stale, '__file__', None)
+        if origin and os.path.realpath(origin).startswith(prefix):
+            continue  # already the managed copy
+        if importlib.machinery.PathFinder.find_spec(
+            name, path=[site_packages_path]
+        ) is None:
+            continue  # no managed copy to prefer
+        shadowed = [
+            key for key in sys.modules
+            if key == name or key.startswith(name + '.')
+        ]
+        removed = {key: sys.modules.pop(key) for key in shadowed}
+        try:
+            fresh = importlib.import_module(name)
+        except Exception as exc:  # noqa: BLE001
+            sys.modules.update(removed)
+            logging.warning("Could not reload %s from %s: %s", name, site_packages_path, exc)
+            continue
+        _invoke_callback(
+            line_callback,
+            f"Using {name} from {getattr(fresh, '__file__', site_packages_path)} "
+            f"instead of {origin}",
+        )
+
+
 class Server(Executor):
     def __init__(self):
         super().__init__()
@@ -547,6 +610,10 @@ class Server(Executor):
         self._app_view: bool = False
 
     def start(self, port, filename, mode=None, line_callback=None, finally_callback=None):
+        # Before anything imports marimo: make sure the managed copies of the
+        # modules Blender already imported from its bundled site-packages win.
+        prefer_managed_modules(line_callback=line_callback)
+
         # Apply marimo patches + register the main-thread pump on Blender's
         # main thread BEFORE we spawn the server thread. The executor must be
         # registered before any session/kernel construction, and
@@ -734,7 +801,15 @@ class Server(Executor):
                 except Exception as exc:  # noqa: BLE001
                     logging.warning("close_kernel failed: %s", exc)
             try:
-                session_manager.shutdown()
+                # marimo >= 0.24 made SessionManager.shutdown a coroutine.
+                # We run on Blender's main thread, not the server's event
+                # loop, so there is nothing to await it with; call the
+                # synchronous close_all_sessions() it wraps instead. What we
+                # skip (LSP server, file watchers) dies with the process.
+                if inspect.iscoroutinefunction(session_manager.shutdown):
+                    session_manager.close_all_sessions()
+                else:
+                    session_manager.shutdown()
             except Exception as exc:  # noqa: BLE001
                 logging.warning("marimo session manager shutdown failed: %s", exc)
 
