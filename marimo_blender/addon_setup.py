@@ -119,15 +119,19 @@ class Installer(Executor):
     """
 
     # marimo declares its full transitive dep set in its own Requires-Dist, so
-    # we let pip resolve those for us. Floor is 0.23.9: that is the release
-    # where `Executor.execute_cell` lost its `graph` argument, which is the
-    # signature our MainThreadExecutor in marimo_patches implements (0.23.0–
-    # 0.23.8 still pass `graph`). Ceiling is the highest series the patches in
-    # marimo_patches have been checked against; 0.24 turned
-    # KernelManagerImpl.start_kernel and SessionManager.shutdown into
-    # coroutines, which both call sites now detect at runtime.
+    # we let pip resolve those for us.
+    #
+    # Pinned to an exact version, not a range: marimo_patches reaches into
+    # marimo's private internals (QueueManagerImpl, KernelManagerImpl,
+    # _EXECUTOR_REGISTRY, launch_kernel's positional arguments), which carry
+    # no compatibility promise and do move between releases — 0.23.9 changed
+    # `Executor.execute_cell`'s signature, 0.24 turned
+    # `KernelManagerImpl.start_kernel` and `SessionManager.shutdown` into
+    # coroutines. A floating range means a reinstall can silently land on a
+    # marimo the patches no longer fit. Bump this deliberately, after
+    # re-checking the symbols marimo_patches touches.
     dependencies = [
-        "marimo>=0.23.9,<0.26",
+        "marimo==0.25.0",
     ]
 
     def __init__(self):
@@ -137,6 +141,12 @@ class Installer(Executor):
     @staticmethod
     def _site_packages_path() -> str | None:
         return next((p for p in sys.path if p.endswith('site-packages')), None)
+
+    @staticmethod
+    def _requirement_name(requirement: str) -> str:
+        """The bare distribution/module name of a requirement string:
+        ``marimo==0.25.0`` -> ``marimo``."""
+        return re.split(r"[<>=!~\s\[]", requirement, maxsplit=1)[0]
 
     def get_required_modules(self) -> dict[str, bool]:
         """Map each required module name to whether it is installed in the
@@ -164,10 +174,7 @@ class Installer(Executor):
                     name, path=search_path
                 )
                 is not None
-                for name in (
-                    re.split(r"[<>=!~\s\[]", d, maxsplit=1)[0]
-                    for d in self.dependencies
-                )
+                for name in map(self._requirement_name, self.dependencies)
             }
         return self._modules_cache
 
@@ -326,7 +333,7 @@ class Installer(Executor):
         automatically: other add-ons may rely on them.
         """
         wanted = {
-            self._canonical(re.split(r"[<>=!~\s\[]", d, maxsplit=1)[0])
+            self._canonical(self._requirement_name(d))
             for d in self.dependencies
         }
         other_paths = [
@@ -363,9 +370,19 @@ class Installer(Executor):
                 os.unlink(marimo_path)
                 print(f'Removed legacy marimo symlink: {marimo_path}')
 
-        missing = [name for name, installed in self.get_required_modules().items() if not installed]
+        # Install the requirement strings, not the bare module names that
+        # get_required_modules() is keyed by: handing pip `marimo` instead of
+        # `marimo==0.25.0` throws the pin away and installs whatever is
+        # newest, which is how an addon pinned to <0.24 ended up running
+        # marimo 0.25.
+        installed = self.get_required_modules()
+        missing = [
+            d for d in self.dependencies
+            if not installed.get(self._requirement_name(d), False)
+        ]
         if not missing:
-            # Still run the installer so the user gets feedback in the log box.
+            # Still run the installer so the user gets feedback in the log
+            # box — and so `--upgrade` moves an off-pin copy onto the pin.
             missing = list(self.dependencies)
 
         _invoke_callback(line_callback, self._describe_uv())
@@ -409,7 +426,7 @@ class Installer(Executor):
                 in_target[self._canonical(name)] = (name, dist)
 
         stack = [
-            self._canonical(re.split(r"[<>=!~\s\[]", d, maxsplit=1)[0])
+            self._canonical(self._requirement_name(d))
             for d in self.dependencies
         ]
         seen: set[str] = set()
