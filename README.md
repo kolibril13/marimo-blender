@@ -108,7 +108,7 @@ The piece that's easy to miss: marimo's runtime context (UI element registry, re
 - **Cells block the Blender UI** while they run. Same caveat as `bpy_jupyter`. A long render or heavy numerical loop will freeze the viewport. This is the unavoidable cost of giving cells safe access to the `bpy` API — that API only works on the main thread, and the main thread is also what draws the UI.
 - **Top-level `await` in cells executes via the sync path** on the main thread. The async branch in marimo's runner (`cell.is_coroutine()`) routes through `execute_cell_async`; our wrapper hands that off to `loop.run_in_executor` so the kernel's asyncio loop stays responsive, but the cell body itself still runs synchronously on the main thread via `base.execute_cell`. Cells that truly need top-level `await` are not supported.
 - **`data:` URI anywidget modules are blocked** by marimo's frontend (e.g. `drawdata.ScatterWidget`). This is an upstream security check baked into marimo's JS bundle, not something the add-on imposes.
-- **The marimo monkey-patches target internal APIs** (`KernelManagerImpl.start_kernel`, `QueueManagerImpl.__init__`, `runtime.restore_signals`, …). They're stable across marimo 0.23.x but may need re-validation on future marimo releases. There is no official extension hook for kernel manager selection — see `_session/session.py:147–181`.
+- **The marimo monkey-patches target internal APIs** (`KernelManagerImpl.start_kernel`, `QueueManagerImpl.__init__`, `runtime.restore_signals`, …). The addon pins one exact marimo version (currently 0.26.0) for that reason; each bump needs the patched symbols re-validated. There is no official extension hook for kernel manager selection — see `_session/session.py:147–181`.
 
 ## Source map
 

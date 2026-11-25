@@ -204,6 +204,7 @@ def _patch_runtime_stream_classes() -> None:
 
 def _patch_kernel_manager() -> None:
     """Force KernelManagerImpl.start_kernel to always use the threading path."""
+    from marimo._config.config import parse_config
     from marimo._config.settings import GLOBAL_SETTINGS
     from marimo._runtime import runtime
     from marimo._session.managers import kernel as kernel_mod
@@ -221,11 +222,31 @@ def _patch_kernel_manager() -> None:
         # modules (bpy, addons, bundled libs) — ~80ms per run, capping UI
         # updates at ~12fps. Hot-reloading modules inside Blender's shared
         # process would be unsafe anyway.
-        user_config = self.config_manager.get_config(hide_secrets=False)
-        user_config = {
-            **user_config,
-            "runtime": {**user_config["runtime"], "auto_reload": "off"},
+        #
+        # marimo >= 0.26 hands the kernel a parsed, typed config (a msgspec
+        # struct) plus the set of paths the server overrode, so we edit the
+        # resolved *dict* before parsing it rather than splatting the
+        # finished config.
+        resolved = self.config_manager.get_config_with_sources(
+            hide_secrets=False
+        )
+        raw_config = {
+            **resolved.config,
+            "runtime": {
+                **resolved.config.get("runtime", {}),
+                "auto_reload": "off",
+            },
         }
+        user_config = parse_config(raw_config)
+
+        # Tell the kernel auto_reload is server-overridden: it ignores
+        # frontend settings edits to overridden paths, so the notebook's own
+        # settings panel can't switch the autoreloader back on mid-session.
+        config_overrides = tuple(
+            dict.fromkeys(
+                (*resolved.override_paths, ("runtime", "auto_reload"))
+            )
+        )
 
         if self.redirect_console_to_browser:
             from marimo._messaging.thread_local_streams import (
@@ -236,7 +257,7 @@ def _patch_kernel_manager() -> None:
         # In subprocess EDIT mode the subprocess registers formatters itself;
         # we do it eagerly here since we share the host process.
         from marimo._output.formatters.formatters import register_formatters
-        register_formatters(theme=self.config_manager.theme)
+        register_formatters()
 
         is_edit_mode = self.mode == kernel_mod.SessionMode.EDIT
 
@@ -248,7 +269,7 @@ def _patch_kernel_manager() -> None:
                 self.queue_manager.completion_queue,
                 self.queue_manager.input_queue,
                 self.queue_manager.stream_queue,
-                None,  # socket_addr — no subprocess pipe
+                None,  # stream_target — no subprocess pipe/socket
                 is_edit_mode,
                 self.configs,
                 self.app_metadata,
@@ -258,6 +279,9 @@ def _patch_kernel_manager() -> None:
                 None,  # win32 interrupt queue
                 None,  # profile path
                 GLOBAL_SETTINGS.LOG_LEVEL,
+                False,  # is_ipc — no parent process to talk to
+                None,  # parent pid
+                config_overrides,
             ),
             daemon=True,
             name="marimo-kernel",

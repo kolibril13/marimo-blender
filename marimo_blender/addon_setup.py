@@ -127,11 +127,15 @@ class Installer(Executor):
     # no compatibility promise and do move between releases — 0.23.9 changed
     # `Executor.execute_cell`'s signature, 0.24 turned
     # `KernelManagerImpl.start_kernel` and `SessionManager.shutdown` into
-    # coroutines. A floating range means a reinstall can silently land on a
-    # marimo the patches no longer fit. Bump this deliberately, after
-    # re-checking the symbols marimo_patches touches.
+    # coroutines, and 0.26 moved every server option (port, host, token,
+    # headless, …) out of `_server.start.start()` into the config manager,
+    # turned `user_config` into a typed msgspec struct, dropped
+    # `register_formatters`' `theme` argument and gave `launch_kernel` a
+    # trailing `config_overrides`. A floating range means a reinstall can
+    # silently land on a marimo the patches no longer fit. Bump this
+    # deliberately, after re-checking the symbols marimo_patches touches.
     dependencies = [
-        "marimo==0.25.0",
+        "marimo==0.26.0",
     ]
 
     def __init__(self):
@@ -145,7 +149,7 @@ class Installer(Executor):
     @staticmethod
     def _requirement_name(requirement: str) -> str:
         """The bare distribution/module name of a requirement string:
-        ``marimo==0.25.0`` -> ``marimo``."""
+        ``marimo==0.26.0`` -> ``marimo``."""
         return re.split(r"[<>=!~\s\[]", requirement, maxsplit=1)[0]
 
     def get_required_modules(self) -> dict[str, bool]:
@@ -372,7 +376,7 @@ class Installer(Executor):
 
         # Install the requirement strings, not the bare module names that
         # get_required_modules() is keyed by: handing pip `marimo` instead of
-        # `marimo==0.25.0` throws the pin away and installs whatever is
+        # `marimo==0.26.0` throws the pin away and installs whatever is
         # newest, which is how an addon pinned to <0.24 ended up running
         # marimo 0.25.
         installed = self.get_required_modules()
@@ -644,11 +648,11 @@ class Server(Executor):
             from marimo._server.start import start
             from marimo._utils.net import find_free_port
             from marimo._session.model import SessionMode
-            from marimo._server.tokens import AuthToken
             if mode is None:
                 mode = SessionMode.EDIT
             from marimo._server.workspace import EmptyWorkspace, infer_workspace
             from marimo._cli.parse_args import parse_args
+            from marimo._config.manager import get_default_config_manager
 
             # marimo + uvicorn install signal handlers (signal.signal and
             # loop.add_signal_handler). Both only work on the main thread, but
@@ -738,23 +742,42 @@ class Server(Executor):
                     _registry_path = None
 
                 workspace = infer_workspace(filename) if filename else EmptyWorkspace()
+
+                # marimo 0.26 moved the server options out of start()'s
+                # signature and into the config manager, so what used to be
+                # keyword arguments are now a `server` override layer. The
+                # overrides sit above the user's marimo.toml, so an existing
+                # config can't move the server off the port/host/token we
+                # need (`token: False` is marimo's "no auth" setting, the
+                # equivalent of the old `AuthToken("")`). `session_ttl: None`
+                # means a disconnected session lives forever, matching the
+                # old `ttl_seconds=None`; headless keeps marimo from opening
+                # a browser in app view, where we open our own window.
+                config_manager = get_default_config_manager(
+                    current_path=filename or None
+                ).with_overrides(
+                    {
+                        "server": {
+                            "host": "127.0.0.1",
+                            "port": self._port,
+                            "headless": mode == SessionMode.RUN,
+                            "token": False,
+                            "include_code": True,
+                            "redirect_console_to_browser": False,
+                            "skew_protection": False,
+                            "watch": False,
+                            "session_ttl": None,
+                        }
+                    }
+                )
                 start(
                     workspace=workspace,
+                    config_manager=config_manager,
                     mode=mode,
                     development_mode=True,
                     quiet=False,
-                    include_code=True,
-                    ttl_seconds=None,
-                    headless=(mode == SessionMode.RUN),
-                    port=self._port,
-                    host="127.0.0.1",
-                    proxy=None,
-                    watch=False,
                     cli_args=parse_args(()),
                     argv=[],
-                    auth_token=AuthToken(""),
-                    redirect_console_to_browser=False,
-                    skew_protection=False,
                 )
             finally:
                 if _registry_path is not None:
