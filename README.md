@@ -4,22 +4,6 @@
 A Blender add-on that runs a [marimo](https://marimo.io) reactive notebook server inside Blender, so cells can `import bpy` and drive the running scene live.
 
 
-# Changelog:
-
-
-v0.3.8
-
-- implement app view
-
-v0.3.7
-
-- UI cleanup
-
-v0.3.5
-
-- Add examples
-
-
 ## Quick start
 
 1. Install the add-on as a Blender extension.

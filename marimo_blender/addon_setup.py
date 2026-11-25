@@ -28,26 +28,20 @@ class Executor:
 
     def __init__(self):
         self._is_running = False
-        self._return_value = None
-        self._exception = None
         self._process: subprocess.Popen | None = None
         self._exit_code = -1
-        self._command_line = ''
 
     def exec_function(self, function, *args, line_callback=None, finally_callback=None):
         def _run_background():
             try:
-                self._return_value = function(*args)
+                function(*args)
             except Exception as exception:
-                self._exception = exception
                 self.write_exception(exception, line_callback=line_callback)
             finally:
                 self._is_running = False
                 _invoke_callback(finally_callback, self)
 
         self._is_running = True
-        self._return_value = None
-        self._exception = None
 
         thread = threading.Thread(target=_run_background, daemon=True)
         thread.start()
@@ -64,7 +58,6 @@ class Executor:
             raise ValueError(f"Process is running: pid={self._process.pid}")
 
         self._exit_code = -1
-        self._command_line = ' '.join(args)
         self._process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
 
         def _enqueue_output():
@@ -87,18 +80,6 @@ class Executor:
     @property
     def is_running(self) -> bool:
         return self._is_running
-
-    @property
-    def return_value(self):
-        return self._return_value
-
-    @property
-    def exception(self) -> Exception:
-        return self._exception
-
-    @property
-    def command_line(self) -> str:
-        return self._command_line
 
     @property
     def exit_code(self) -> int:
@@ -539,8 +520,6 @@ class Installer(Executor):
 
 def _open_app_window(url: str, width: int = 340, height: int = 240):
     """Open *url* in a chromeless app window. Falls back to webbrowser."""
-    import os
-    import subprocess
     chrome_candidates = [
         '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         '/Applications/Chromium.app/Contents/MacOS/Chromium',
